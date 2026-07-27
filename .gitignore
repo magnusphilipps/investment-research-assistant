@@ -1,49 +1,113 @@
-# See https://docs.github.com/en/get-started/getting-started-with-git/ignoring-files for more about ignoring files.
+# ============================================================
+# .gitignore — Investment Research Assistant
+# ============================================================
+# Files and folders listed here are NOT tracked by Git.
+# This keeps the repository clean and prevents secrets,
+# build artefacts, and machine-specific files from being shared.
 
-# compiled output
-dist
-tmp
-out-tsc
-*.tsbuildinfo
-.expo
-.expo-shared
+# ------------------------------------------------------------
+# Python
+# ------------------------------------------------------------
 
-# dependencies
-node_modules
+# Byte-compiled / optimised source files
+__pycache__/
+*.py[cod]
+*$py.class
 
-# IDEs and editors
-/.idea
-.project
-.classpath
-.c9/
-*.launch
-.settings/
-*.sublime-workspace
+# Distribution / packaging
+*.egg
+*.egg-info/
+dist/
+build/
+wheels/
+sdist/
+*.whl
 
-# IDE - VSCode
-.vscode/*
-!.vscode/settings.json
-!.vscode/tasks.json
-!.vscode/launch.json
-!.vscode/extensions.json
+# Virtual environments (local dependency installs)
+.venv/
+venv/
+env/
+ENV/
+.env
 
-# misc
-/.sass-cache
-/connect.lock
-/coverage
-/libpeerconnection.log
-npm-debug.log
-yarn-error.log
-testem.log
-/typings
+# pip / uv artefacts
+pip-log.txt
+pip-delete-this-directory.txt
+uv.lock
 
-# System Files
-.DS_Store
-Thumbs.db
+# Test and coverage reports
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+nosetests.xml
+coverage.xml
+*.cover
 
-.cursor/rules/nx-rules.mdc
-.github/instructions/nx.instructions.md
+# mypy / pyright type checking cache
+.mypy_cache/
+.pyright/
+pyrightconfig.json
 
+# Jupyter Notebooks
+.ipynb_checkpoints/
+*.ipynb
+
+# ------------------------------------------------------------
 # Replit
-.cache/
-.local/
+# ------------------------------------------------------------
+
+# Replit stores installed Python packages here — not needed in Git
+.pythonlibs/
+
+# Replit internal config — machine-specific, do not commit
+.replit
+.replitignore
+.upm/
+
+# Replit breakpoints / debug state
+.breakpoints
+
+# ------------------------------------------------------------
+# Environment variables and secrets
+# ------------------------------------------------------------
+# Never commit API keys, passwords, or tokens.
+
+.env
+.env.*
+*.env
+secrets.toml
+config.local.*
+
+# ------------------------------------------------------------
+# Editor and OS files
+# ------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains IDEs (PyCharm, etc.)
+.idea/
+
+# Vim swap files
+*.swp
+*.swo
+*~
+
+# ------------------------------------------------------------
+# Logs and temporary files
+# ------------------------------------------------------------
+*.log
+*.tmp
+*.bak

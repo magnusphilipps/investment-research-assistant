@@ -1,0 +1,10 @@
+# requirements.txt — Python dependencies
+#
+# Install everything in this file with:
+#   pip install -r requirements.txt
+#
+# Each line is one package. You can pin to an exact version
+# (e.g. yfinance==0.2.40) to ensure reproducible installs,
+# or leave it unpinned to always get the latest release.
+
+yfinance
