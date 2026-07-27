@@ -36,7 +36,8 @@ requirements.txt                ← Python dependencies (pip install -r requirem
 
 ## User Preferences
 
-- **Do not create Git commits.** The user reviews changes and commits manually.
+- **Do not create Git commits or push changes.** The user reviews, commits, and pushes manually.
+- **Every feature implementation must also update README.md** to reflect the new capability.
 
 - Long-term learning project — keep everything simple, modular, and well commented.
 - Python only for now. No JavaScript, no web UI yet.
