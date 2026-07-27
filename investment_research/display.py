@@ -13,7 +13,17 @@
 #     - main.py     →  coordinates the two
 #
 #   This makes each file easier to read, test, and change.
+#
+# NEW IN PHASE 2:
+#   - format_employees()      — formats a headcount integer readably
+#   - print_company_overview() — prints the six new overview fields
+#   - textwrap is imported to word-wrap long business descriptions
 # ============================================================
+
+# textwrap is part of Python's standard library — no installation needed.
+# It provides utilities for wrapping and filling text to a fixed width,
+# which is useful when printing long paragraphs in a terminal.
+import textwrap
 
 
 def format_market_cap(market_cap: int | None) -> str:
@@ -81,6 +91,91 @@ def print_stock_info(data: dict) -> None:
 
     print(separator)
     print()          # Trailing blank line
+
+
+def format_employees(employees: int | None) -> str:
+    """
+    Convert a raw employee headcount into a human-readable string.
+
+    For example:
+        161000  →  "161,000"
+        None    →  "N/A"
+
+    The :, format specifier tells Python to insert commas as
+    thousands separators. It is the same specifier used for
+    market cap numbers elsewhere in this file.
+
+    Parameters:
+        employees: The raw integer from yfinance, or None.
+
+    Returns:
+        A formatted string.
+    """
+    if employees is None:
+        return "N/A"
+
+    # f"{value:,}" formats an integer with comma separators.
+    # Example: f"{161000:,}"  →  "161,000"
+    return f"{employees:,}"
+
+
+def print_company_overview(data: dict) -> None:
+    """
+    Print the Phase 2 company overview block to the terminal.
+
+    This function is called immediately after print_stock_info()
+    in main.py. It receives the same `data` dictionary and reads
+    only the Phase 2 keys that belong to it.
+
+    Parameters:
+        data (dict): The dictionary returned by fetcher.get_stock_info()
+    """
+
+    separator = "-" * 40
+
+    # --- Section header ---
+    print(f"  COMPANY OVERVIEW")
+    print(separator)
+
+    # or is used as a fallback here: if data.get("sector") returns
+    # None (field was missing), the expression evaluates to "N/A".
+    # This is called a "short-circuit" — Python stops evaluating
+    # as soon as it finds a truthy value.
+    print(f"  Sector       :  {data.get('sector')     or 'N/A'}")
+    print(f"  Industry     :  {data.get('industry')   or 'N/A'}")
+    print(f"  Country      :  {data.get('country')    or 'N/A'}")
+    print(f"  Employees    :  {format_employees(data.get('employees'))}")
+    print(f"  Website      :  {data.get('website')    or 'N/A'}")
+
+    print(separator)
+
+    # --- Business description ---
+    # Business descriptions from Yahoo Finance are often several hundred
+    # words long. Printing them as one unbroken line is hard to read.
+    # textwrap.fill() wraps a long string to a maximum line width and
+    # returns it as a single string with newline characters inserted.
+    #
+    # textwrap.fill(text, width, initial_indent, subsequent_indent):
+    #   - width             : maximum characters per line
+    #   - initial_indent    : prefix added to the very first line
+    #   - subsequent_indent : prefix added to every line after the first
+    #
+    # Both indents use two spaces so the text aligns with the fields above.
+    description = data.get("description")
+
+    if description:
+        wrapped = textwrap.fill(
+            description,
+            width=70,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        )
+        print(wrapped)
+    else:
+        print("  No description available.")
+
+    print(separator)
+    print()  # Trailing blank line
 
 
 def print_error(message: str) -> None:

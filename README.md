@@ -9,12 +9,14 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
-## Current Features (v1)
+## Current Features (v2)
 
 - Interactive terminal prompt — type a ticker, get results instantly
-- Looks up: company name, current share price, market capitalisation
-- Market cap displayed in human-readable form (Millions / Billions / Trillions)
-- Graceful error handling for invalid tickers and network problems
+- **Price snapshot:** company name, current share price, market capitalisation
+- **Company overview:** sector, industry, country, employee count, website, business description
+- Market cap and employee count displayed in human-readable form
+- Business description word-wrapped to 70 characters for comfortable reading
+- Graceful handling of missing fields — shows "N/A" rather than crashing
 - Loop continues until you type `quit`
 
 ---
@@ -86,10 +88,13 @@ one new concept without requiring changes to existing code.
 - Console app with a live prompt
 - Company name, share price, market cap via yfinance
 
-### Phase 2 — Richer Data (planned)
+### Phase 2 — Company Overview ✅
+- Sector, industry, country, employee count, website
+- Full business description, word-wrapped for readability
+
+### Phase 3 — Key Statistics (planned)
 - 52-week high / low
 - P/E ratio and dividend yield
-- Sector and industry
 
 ### Phase 3 — Watchlist (planned)
 - Save a list of tickers to a local file

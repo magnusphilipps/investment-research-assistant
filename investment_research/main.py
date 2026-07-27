@@ -82,4 +82,9 @@ def run() -> None:
             continue
 
         # All good — display the stock information.
+        # print_stock_info() shows the Phase 1 price snapshot.
+        # print_company_overview() shows the Phase 2 overview beneath it.
+        # Each function receives the same `data` dictionary; they each
+        # just read the keys that belong to their section.
         display.print_stock_info(data)
+        display.print_company_overview(data)
