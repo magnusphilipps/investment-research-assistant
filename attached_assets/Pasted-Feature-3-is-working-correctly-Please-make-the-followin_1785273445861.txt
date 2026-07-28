@@ -1,0 +1,78 @@
+Feature 3 is working correctly. Please make the following small presentation improvements only.
+
+Important Git instructions:
+- Do not create any Git commit.
+- Do not push anything to GitHub.
+- Do not stage files.
+- Do not amend, rebase, reset or otherwise modify Git history.
+- Leave all changes uncommitted for me to review.
+
+Requested changes:
+
+1. Rename the label:
+   "Rev. Acceleration"
+   to:
+   "Revenue Growth Trend"
+
+2. Add a concise, rule-based summary below each financial statement section.
+
+Income statement summary:
+- Base the summary only on the displayed revenue growth trend and margin movements.
+- Mention whether revenue growth is accelerating, slowing or stable.
+- Mention whether gross margin and operating margin improved, declined or stayed broadly stable compared with the previous year.
+- Do not use an LLM or make unsupported qualitative claims.
+- Example format:
+  "Revenue growth is accelerating. Gross and operating margins both improved compared with the previous year."
+
+Balance sheet summary:
+- Base it only on cash, debt, debt-to-equity and current ratio.
+- Do not claim that the company is financially safe or unsafe.
+- Clearly state the facts.
+- Example format:
+  "The company holds $35.9B in cash against $98.7B of debt. Its current ratio is 0.89x and debt-to-equity ratio is 1.34x."
+
+Cash flow summary:
+- Base it only on operating cash flow, capital expenditure and free cash flow.
+- Example format:
+  "The business generated $111.5B in operating cash flow and $98.8B in free cash flow after $12.7B of capital expenditure."
+
+3. Add year-on-year margin changes beside the latest gross and operating margins.
+
+For example:
+- Gross Margin: 46.9%  (+0.7 percentage points YoY)
+- Operating Margin: 32.0%  (+0.5 percentage points YoY)
+
+Important:
+- Calculate margin changes in percentage points, not percentage growth.
+- If the previous annual period is unavailable, display N/A.
+- Preserve the existing multi-year table layout as much as possible.
+
+4. Keep the summaries neutral and factual.
+
+Do not add:
+- colours
+- emojis
+- investment recommendations
+- star ratings
+- valuation analysis
+- AI-generated commentary
+- Streamlit
+- later roadmap features
+
+5. Preserve:
+- all current calculations
+- capital expenditure sign handling
+- invalid ticker handling
+- missing-data handling
+- existing Feature 1, Feature 2 and Feature 3 functionality
+
+6. Update README.md to mention:
+- rule-based financial summaries
+- year-on-year margin changes measured in percentage points
+
+At the end, tell me:
+- which files were changed
+- what was changed in each file
+- which tests were run
+- whether all tests passed
+- confirm that no Git commit or push was performed

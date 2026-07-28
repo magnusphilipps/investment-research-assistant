@@ -1,0 +1,165 @@
+Implement Feature 3: Financial Statements for the existing Investment Research Assistant.
+
+Important Git instructions:
+- Do not create any Git commit.
+- Do not push anything to GitHub.
+- Do not amend, rebase, reset, stage or otherwise modify Git history.
+- Make code and documentation changes only.
+- Leave all changes uncommitted so I can review, rename and commit them manually.
+
+Feature goal:
+Add a clear financial statements section that helps a user understand:
+1. Whether the business is making money
+2. What the company owns and owes
+3. Where cash actually came from and went
+
+Use the existing project structure and yfinance integration. Do not rebuild the application or add later features such as valuation, news, peer comparison, AI analysis, Streamlit or report generation.
+
+Required outputs
+
+A. Income statement
+Show the latest available annual figures, plus enough historical data to calculate trends where possible:
+
+- Revenue
+- Revenue growth
+- Whether revenue growth is accelerating or slowing
+- Gross profit
+- Gross margin
+- Operating income
+- Operating margin
+- Net income
+- EPS
+
+Definitions:
+- Gross margin = gross profit / revenue
+- Operating margin = operating income / revenue
+- Revenue growth = percentage change from the prior comparable annual period
+
+For revenue growth acceleration:
+- Compare the latest annual revenue growth rate with the previous annual revenue growth rate.
+- Clearly label it as accelerating, slowing, broadly stable or unavailable.
+- Do not make the conclusion if there is insufficient historical data.
+
+EPS:
+- Display reported or diluted EPS where available.
+- Do not claim EPS growth is driven by buybacks unless share-count data is available and supports that conclusion.
+- If possible, also display diluted average shares outstanding so the user can compare EPS growth with changes in share count.
+
+B. Balance sheet
+Show:
+
+- Cash and cash equivalents
+- Total debt
+- Total shareholder equity
+- Debt-to-equity ratio
+- Current assets
+- Current liabilities
+- Current ratio
+- Retained earnings
+
+Definitions:
+- Debt-to-equity ratio = total debt / total shareholder equity
+- Current ratio = current assets / current liabilities
+
+Handle negative or zero shareholder equity carefully:
+- Do not calculate a misleading debt-to-equity ratio.
+- Display “Not meaningful” with a brief reason where appropriate.
+
+C. Cash flow statement
+Show:
+
+- Operating cash flow
+- Capital expenditure
+- Free cash flow
+
+Definition:
+- Free cash flow = operating cash flow - capital expenditure
+
+Important:
+- Some data sources report capital expenditure as a negative cash outflow.
+- Normalise the sign correctly so free cash flow is not accidentally added or subtracted twice.
+- Clearly document the approach in the code.
+
+Presentation requirements
+
+- Keep data retrieval, calculations and display formatting separated.
+- Display values in the company’s reporting currency where that information is available.
+- Format large figures clearly, for example:
+  - £125.4B
+  - $8.7M
+- Format percentages consistently.
+- Label annual periods clearly.
+- Do not present missing values as zero.
+- Use “N/A” where information is unavailable.
+- Do not crash when a line item is missing or named differently.
+- Preserve the existing invalid-ticker handling.
+- Preserve all existing Feature 1 and Feature 2 functionality.
+
+Data reliability requirements
+
+- Use annual financial statements rather than quarterly figures for this feature.
+- Retrieve at least three annual periods where available so growth and acceleration can be assessed.
+- yfinance line-item labels may vary between companies, so create a robust helper that checks reasonable alternative names for each financial item.
+- Do not silently substitute unrelated accounting fields.
+- If a calculation cannot be made safely, return N/A and explain why in the display where useful.
+- Add clear docstrings and comments around financial calculations.
+
+Suggested architecture
+
+Use the existing structure, but create a dedicated financial statements module if one does not already exist, for example:
+
+- investment_research/financials.py
+  - retrieve annual statements
+  - extract line items
+  - calculate margins and ratios
+  - calculate revenue growth and growth acceleration
+  - calculate free cash flow
+- investment_research/display.py
+  - format and display the results
+- investment_research/main.py
+  - call the new feature without putting calculation logic inside the main control flow
+
+You may choose a better structure if it fits the current codebase, but explain why.
+
+Testing requirements
+
+Test with at least:
+- AAPL
+- NFLX
+- JPM
+- NBIS
+- one invalid ticker
+
+Check that:
+- valid companies display the financial sections
+- missing fields show N/A instead of crashing
+- banks or financial companies with unusual statement structures are handled gracefully
+- invalid tickers still show a clear error
+- free cash flow signs are correct
+- ratios do not divide by zero
+
+README requirement
+
+Update README.md automatically to:
+- mark Feature 3 as complete
+- add the new financial statement capabilities
+- explain the formulas used for:
+  - gross margin
+  - operating margin
+  - revenue growth
+  - debt-to-equity ratio
+  - current ratio
+  - free cash flow
+- note that data availability and accounting labels vary by company
+- keep the existing roadmap intact
+
+Do not create a separate README commit. Just update the README file and leave it uncommitted with the code changes.
+
+At the end, provide:
+1. A concise summary of the feature
+2. Every file created or changed
+3. The purpose of each changed file
+4. The main Python concepts used
+5. Any limitations of yfinance data
+6. The exact tests performed
+7. Confirmation that no commit or push was performed

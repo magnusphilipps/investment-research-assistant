@@ -8,22 +8,32 @@
 #
 #   Separating "display" code from "data" code is a core
 #   principle called Separation of Concerns. It means:
-#     - fetcher.py  →  knows HOW to get data
-#     - display.py  →  knows HOW to show data
-#     - main.py     →  coordinates the two
+#     - fetcher.py    →  knows HOW to get data
+#     - financials.py →  knows HOW to calculate financial figures
+#     - display.py    →  knows HOW to show data
+#     - main.py       →  coordinates all three
 #
 #   This makes each file easier to read, test, and change.
 #
-# NEW IN PHASE 2:
-#   - format_employees()      — formats a headcount integer readably
-#   - print_company_overview() — prints the six new overview fields
-#   - textwrap is imported to word-wrap long business descriptions
+# PHASES:
+#   Phase 1: format_market_cap(), print_stock_info()
+#   Phase 2: format_employees(), print_company_overview()
+#   Phase 3: format_financial_value(), format_percent(),
+#             format_growth(), format_eps(), format_shares(),
+#             print_income_statement(), print_balance_sheet(),
+#             print_cash_flow()
 # ============================================================
 
 # textwrap is part of Python's standard library — no installation needed.
 # It provides utilities for wrapping and filling text to a fixed width,
 # which is useful when printing long paragraphs in a terminal.
 import textwrap
+
+# ---- Layout constants for Phase 3 financial tables ----------
+# Keeping these as module-level constants means you only need to
+# change one number to reformat every financial table at once.
+_LABEL_WIDTH = 24   # characters reserved for the row label column
+_COL_WIDTH   = 12   # characters per year column (right-aligned values)
 
 
 def format_market_cap(market_cap: int | None) -> str:
@@ -176,6 +186,554 @@ def print_company_overview(data: dict) -> None:
 
     print(separator)
     print()  # Trailing blank line
+
+
+# ============================================================
+# Phase 3 — Financial Statement Formatters and Printers
+# ============================================================
+
+def format_financial_value(value: float | None, symbol: str = "$") -> str:
+    """
+    Format a raw financial figure into a compact, readable string.
+
+    Uses T/B/M/K suffixes so large numbers fit neatly into table columns.
+
+    Examples (with symbol="$"):
+        391_000_000_000  →  "$391.0B"
+         -8_700_000      →  "-$8.7M"
+               1_234     →  "$1.2K"
+                None     →  "N/A"
+
+    Parameters:
+        value  : Raw float from financials.py, or None.
+        symbol : Currency symbol prefix (e.g. "$", "£", "€").
+
+    Returns:
+        A compact formatted string.
+    """
+    if value is None:
+        return "N/A"
+
+    # Handle negative values: extract the sign separately so we can
+    # place it before the currency symbol, e.g. "-$8.7M" not "$-8.7M".
+    sign    = "-" if value < 0 else ""
+    abs_val = abs(value)
+
+    if abs_val >= 1e12:
+        return f"{sign}{symbol}{abs_val / 1e12:.1f}T"
+    elif abs_val >= 1e9:
+        return f"{sign}{symbol}{abs_val / 1e9:.1f}B"
+    elif abs_val >= 1e6:
+        return f"{sign}{symbol}{abs_val / 1e6:.1f}M"
+    elif abs_val >= 1e3:
+        return f"{sign}{symbol}{abs_val / 1e3:.1f}K"
+    else:
+        return f"{sign}{symbol}{abs_val:.2f}"
+
+
+def format_percent(value: float | None) -> str:
+    """
+    Format a percentage value (e.g. a margin) to one decimal place.
+
+    The value is expected as a plain percentage, not a fraction —
+    so 46.2 means 46.2%, not 0.462.
+
+    Examples:
+        46.2   →  "46.2%"
+        -3.1   →  "-3.1%"
+        None   →  "N/A"
+    """
+    if value is None:
+        return "N/A"
+    return f"{value:.1f}%"
+
+
+def format_growth(value: float | None) -> str:
+    """
+    Format a revenue growth percentage with an explicit +/- sign.
+
+    The explicit sign makes it immediately clear whether growth is
+    positive or negative — important when several years are shown
+    side by side.
+
+    Examples:
+         2.04  →  "+2.0%"
+        -2.80  →  "-2.8%"
+         None  →  "N/A"
+    """
+    if value is None:
+        return "N/A"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.1f}%"
+
+
+def format_margin_change(value: float | None) -> str:
+    """
+    Format a year-on-year margin change in percentage points (pp).
+
+    Margin changes are measured in percentage POINTS, not percentage
+    growth.  A gross margin moving from 44.1% to 46.2% is a change
+    of +2.1 pp — not +4.8% (which would be the percentage change of
+    the margin itself, a different and less intuitive figure).
+
+    Examples:
+         0.7  →  "+0.7 pp"
+        -1.2  →  "-1.2 pp"
+        None  →  "N/A"
+    """
+    if value is None:
+        return "N/A"
+    sign = "+" if value >= 0 else ""
+    return f"{sign}{value:.1f} pp"
+
+
+def _margin_direction(yoy: float | None) -> str:
+    """
+    Convert a YoY margin change (in pp) to a plain-English direction word.
+
+    Used to build rule-based summary sentences.  A threshold of ±0.2 pp
+    avoids labelling rounding-level noise as a meaningful movement.
+
+    Returns one of: "improved", "declined", "broadly stable", or ""
+    (empty string when data is unavailable, so the caller can skip it).
+    """
+    if yoy is None:
+        return ""
+    if yoy > 0.2:
+        return "improved"
+    elif yoy < -0.2:
+        return "declined"
+    else:
+        return "broadly stable"
+
+
+def format_eps(value: float | None, symbol: str = "$") -> str:
+    """
+    Format an earnings-per-share value to two decimal places.
+
+    EPS is a small per-share number (e.g. 6.08) so we do not apply
+    the B/M/K suffixes — two decimal places is sufficient precision.
+
+    Examples:
+        6.08   →  "$6.08"
+        -1.25  →  "-$1.25"
+        None   →  "N/A"
+    """
+    if value is None:
+        return "N/A"
+    sign    = "-" if value < 0 else ""
+    abs_val = abs(value)
+    return f"{sign}{symbol}{abs_val:.2f}"
+
+
+def format_shares(value: float | None) -> str:
+    """
+    Format a share count (diluted average shares outstanding).
+
+    Share counts are large raw integers (e.g. 15_410_000_000) so
+    we apply B/M suffixes for readability.  No currency symbol is
+    used — shares are a count, not a monetary amount.
+
+    Examples:
+        15_410_000_000  →  "15.41B"
+           800_000_000  →  "800.0M"
+                  None  →  "N/A"
+    """
+    if value is None:
+        return "N/A"
+    abs_val = abs(value)
+    if abs_val >= 1e9:
+        return f"{value / 1e9:.2f}B"
+    elif abs_val >= 1e6:
+        return f"{value / 1e6:.1f}M"
+    return f"{value:,.0f}"
+
+
+def _table_row(label: str, cells: list[str]) -> str:
+    """
+    Build one row of a multi-column financial table.
+
+    The label is left-aligned in _LABEL_WIDTH characters.
+    Each cell value is right-aligned in _COL_WIDTH characters.
+    This produces columns that line up neatly regardless of
+    how long the formatted values are.
+
+    Example output (with _LABEL_WIDTH=24, _COL_WIDTH=12):
+        "  Revenue                   $391.0B     $383.3B     $394.3B"
+
+    Parameters:
+        label : Row description, e.g. "Revenue"
+        cells : List of formatted string values, one per year column.
+    """
+    # f"  {label:<{_LABEL_WIDTH}}" left-pads the label to exactly
+    # _LABEL_WIDTH characters, preceded by two spaces for indentation.
+    label_str  = f"  {label:<{_LABEL_WIDTH}}"
+    # f"{cell:>{_COL_WIDTH}}" right-aligns each cell value.
+    cells_str  = "".join(f"{cell:>{_COL_WIDTH}}" for cell in cells)
+    return label_str + cells_str
+
+
+def print_income_statement(fin: dict) -> None:
+    """
+    Print the income statement section of the financial report.
+
+    Displays up to four annual periods in a side-by-side table:
+      - Revenue and revenue growth (with acceleration label)
+      - Gross profit and gross margin
+      - Operating income and operating margin
+      - Net income
+      - EPS (diluted where available; basic otherwise)
+      - Diluted average shares (so the user can judge buyback effects)
+
+    Parameters:
+        fin (dict): The dictionary returned by
+                    financials.get_financial_statements().
+    """
+    inc    = fin.get("income", {})
+    sym    = fin.get("currency_symbol", "$")
+    code   = fin.get("currency_code", "USD")
+    sep    = "-" * (2 + _LABEL_WIDTH + _COL_WIDTH * 3)
+
+    print()
+    print(f"  INCOME STATEMENT  (Annual · {code})")
+    print(sep)
+
+    # If the income statement was not available, show a single message.
+    if "error" in inc:
+        print(f"  {inc['error']}")
+        print(sep)
+        print()
+        return
+
+    years = inc.get("years", [])
+    if not years:
+        print("  No annual income statement data available.")
+        print(sep)
+        print()
+        return
+
+    n = len(years)
+
+    # ---- Header row: year labels --------------------------------
+    # Display years as "FY2024" to make it clear these are fiscal years.
+    year_headers = [f"FY{y}" for y in years]
+    print(_table_row("", year_headers))
+    print(sep)
+
+    # ---- Revenue ------------------------------------------------
+    rev_cells = [
+        format_financial_value(inc["revenue"][i], sym) for i in range(n)
+    ]
+    print(_table_row("Revenue", rev_cells))
+
+    # Revenue growth: growth[i] = growth achieved in year[i].
+    # The oldest available year has no prior year to compare, so it
+    # shows "N/A".  We fill from revenue_growth, padding with None.
+    rg = inc.get("revenue_growth", [])
+    growth_cells = []
+    for i in range(n):
+        growth_cells.append(format_growth(rg[i]) if i < len(rg) else "N/A")
+    print(_table_row("  Revenue Growth", growth_cells))
+
+    # Revenue Growth Trend spans all columns — it is a single conclusion
+    # about the direction of growth, not a per-year value.
+    accel = inc.get("acceleration", "Unavailable")
+    print(f"  {'  Revenue Growth Trend':<{_LABEL_WIDTH}}  {accel}")
+    print(sep)
+
+    # ---- YoY margin changes (computed once, used in table + summary) ----
+    # Percentage point change = latest margin − prior year margin.
+    # We compute these before the gross profit block so the same values
+    # can be reused in the summary sentence below the table.
+    gm_list = inc.get("gross_margin", [])
+    om_list = inc.get("op_margin",    [])
+
+    yoy_gm = (
+        gm_list[0] - gm_list[1]
+        if len(gm_list) >= 2 and gm_list[0] is not None and gm_list[1] is not None
+        else None
+    )
+    yoy_om = (
+        om_list[0] - om_list[1]
+        if len(om_list) >= 2 and om_list[0] is not None and om_list[1] is not None
+        else None
+    )
+
+    # ---- Gross profit -------------------------------------------
+    gp_cells = [
+        format_financial_value(inc["gross_profit"][i], sym) for i in range(n)
+    ]
+    print(_table_row("Gross Profit", gp_cells))
+
+    gm_cells = [format_percent(gm_list[i]) for i in range(n)]
+    print(_table_row("  Gross Margin", gm_cells))
+
+    # YoY change: only the most recent year has a comparison period,
+    # so we fill the remaining columns with empty strings.
+    gm_yoy_cells = [format_margin_change(yoy_gm)] + [""] * (n - 1)
+    print(_table_row("    YoY Change", gm_yoy_cells))
+    print(sep)
+
+    # ---- Operating income ---------------------------------------
+    op_cells = [
+        format_financial_value(inc["op_income"][i], sym) for i in range(n)
+    ]
+    print(_table_row("Operating Income", op_cells))
+
+    om_cells = [format_percent(om_list[i]) for i in range(n)]
+    print(_table_row("  Operating Margin", om_cells))
+
+    om_yoy_cells = [format_margin_change(yoy_om)] + [""] * (n - 1)
+    print(_table_row("    YoY Change", om_yoy_cells))
+    print(sep)
+
+    # ---- Net income, EPS, shares --------------------------------
+    ni_cells = [
+        format_financial_value(inc["net_income"][i], sym) for i in range(n)
+    ]
+    print(_table_row("Net Income", ni_cells))
+
+    eps_cells = [format_eps(inc["eps_diluted"][i], sym) for i in range(n)]
+    print(_table_row("EPS (Diluted)", eps_cells))
+
+    sh_cells = [format_shares(inc["shares_diluted"][i]) for i in range(n)]
+    print(_table_row("Shares (Diluted)", sh_cells))
+
+    print(sep)
+
+    # ---- Rule-based summary -------------------------------------
+    # Built entirely from the data already computed above.
+    # No qualitative judgements — only factual statements about direction.
+    summary_parts = []
+
+    # Revenue growth trend sentence
+    if accel == "Accelerating":
+        summary_parts.append("Revenue growth is accelerating.")
+    elif accel == "Slowing":
+        summary_parts.append("Revenue growth is slowing.")
+    elif accel == "Broadly stable":
+        summary_parts.append("Revenue growth is broadly stable.")
+    # "Unavailable" → omit rather than print a confusing sentence
+
+    # Margin direction sentence
+    # _margin_direction() returns "improved", "declined", "broadly stable",
+    # or "" (empty string) when the value is None.
+    gm_dir = _margin_direction(yoy_gm)
+    om_dir = _margin_direction(yoy_om)
+
+    if gm_dir and om_dir:
+        if gm_dir == om_dir:
+            # Both moved in the same direction — combine into one sentence.
+            summary_parts.append(
+                f"Gross and operating margins both {gm_dir} "
+                f"compared with the previous year."
+            )
+        else:
+            summary_parts.append(
+                f"Gross margin {gm_dir} and operating margin {om_dir} "
+                f"compared with the previous year."
+            )
+    elif gm_dir:
+        summary_parts.append(
+            f"Gross margin {gm_dir} compared with the previous year."
+        )
+    elif om_dir:
+        summary_parts.append(
+            f"Operating margin {om_dir} compared with the previous year."
+        )
+
+    if summary_parts:
+        summary_text = " ".join(summary_parts)
+        print(textwrap.fill(
+            summary_text,
+            width=70,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        ))
+        print()
+    else:
+        print()
+
+
+def print_balance_sheet(fin: dict) -> None:
+    """
+    Print the balance sheet section (most recent annual period).
+
+    Displays:
+      - Liquidity : Cash, Total Debt, Shareholders Equity, D/E ratio
+      - Short-term: Current Assets, Current Liabilities, Current Ratio
+      - Equity    : Retained Earnings
+
+    The D/E ratio is suppressed with an explanation when equity is
+    zero or negative, to avoid misleading the user.
+
+    Parameters:
+        fin (dict): The dictionary returned by
+                    financials.get_financial_statements().
+    """
+    bal = fin.get("balance", {})
+    sym = fin.get("currency_symbol", "$")
+    code = fin.get("currency_code", "USD")
+    sep  = "-" * 42
+
+    print()
+    print(f"  BALANCE SHEET  (Most Recent Annual · {code})")
+    print(sep)
+
+    if "error" in bal:
+        print(f"  {bal['error']}")
+        print(sep)
+        print()
+        return
+
+    def _line(label: str, value: str) -> None:
+        """Print one labelled value row, left/right aligned."""
+        print(f"  {label:<26}{value:>12}")
+
+    # ---- Liquidity block ----------------------------------------
+    _line("Cash & Equivalents",  format_financial_value(bal["cash"],       sym))
+    _line("Total Debt",           format_financial_value(bal["total_debt"], sym))
+    _line("Shareholders Equity",  format_financial_value(bal["equity"],     sym))
+
+    # Debt-to-equity: show ratio if valid, otherwise the note.
+    if bal["de_ratio"] is not None:
+        _line("Debt / Equity Ratio", f"{bal['de_ratio']:.2f}x")
+    else:
+        _line("Debt / Equity Ratio", bal["de_note"] or "N/A")
+
+    print(sep)
+
+    # ---- Short-term solvency block ------------------------------
+    _line("Current Assets",      format_financial_value(bal["current_assets"],       sym))
+    _line("Current Liabilities", format_financial_value(bal["current_liabilities"],  sym))
+
+    if bal["current_ratio"] is not None:
+        _line("Current Ratio", f"{bal['current_ratio']:.2f}x")
+    else:
+        _line("Current Ratio", "N/A")
+
+    print(sep)
+
+    # ---- Retained earnings --------------------------------------
+    _line("Retained Earnings",   format_financial_value(bal["retained_earnings"], sym))
+
+    print(sep)
+
+    # ---- Rule-based summary -------------------------------------
+    # States the key facts without making any safety or risk judgement.
+    summary_parts = []
+
+    cash_str = format_financial_value(bal.get("cash"),       sym)
+    debt_str = format_financial_value(bal.get("total_debt"), sym)
+
+    if bal.get("cash") is not None or bal.get("total_debt") is not None:
+        cash_clause = f"{cash_str} in cash" if bal.get("cash") is not None else "an undisclosed cash position"
+        debt_clause = f"{debt_str} of debt" if bal.get("total_debt") is not None else "an undisclosed debt level"
+        summary_parts.append(f"The company holds {cash_clause} against {debt_clause}.")
+
+    ratio_clauses = []
+    if bal.get("current_ratio") is not None:
+        ratio_clauses.append(f"current ratio of {bal['current_ratio']:.2f}x")
+    if bal.get("de_ratio") is not None:
+        ratio_clauses.append(f"debt-to-equity ratio of {bal['de_ratio']:.2f}x")
+    elif bal.get("de_note") and bal["de_note"] not in ("N/A",):
+        # e.g. "Not meaningful (negative equity)" — worth stating
+        ratio_clauses.append(f"debt-to-equity ratio is {bal['de_note'].lower()}")
+
+    if ratio_clauses:
+        # Join two clauses with "and"; one clause stands alone.
+        summary_parts.append(f"Its {' and '.join(ratio_clauses)}.")
+
+    if summary_parts:
+        summary_text = " ".join(summary_parts)
+        print(textwrap.fill(
+            summary_text,
+            width=70,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        ))
+    print()
+
+
+def print_cash_flow(fin: dict) -> None:
+    """
+    Print the cash flow section (most recent annual period).
+
+    Displays:
+      - Operating Cash Flow
+      - Capital Expenditure (shown as a positive spend amount)
+      - Free Cash Flow = Operating CF − CapEx
+
+    A note explains the CapEx sign convention used internally so
+    the reader is not confused by the positive display of what is
+    technically a cash outflow.
+
+    Parameters:
+        fin (dict): The dictionary returned by
+                    financials.get_financial_statements().
+    """
+    cf   = fin.get("cashflow", {})
+    sym  = fin.get("currency_symbol", "$")
+    code = fin.get("currency_code", "USD")
+    sep  = "-" * 42
+
+    print()
+    print(f"  CASH FLOW  (Most Recent Annual · {code})")
+    print(sep)
+
+    if "error" in cf:
+        print(f"  {cf['error']}")
+        print(sep)
+        print()
+        return
+
+    def _line(label: str, value: str) -> None:
+        print(f"  {label:<26}{value:>12}")
+
+    _line("Operating Cash Flow",  format_financial_value(cf["operating_cf"],   sym))
+
+    # CapEx is stored as a positive spend amount (abs() was applied in
+    # financials.py).  We display it prefixed with "−" to make clear it
+    # is money going out, without it being a negative number in the data.
+    capex_display = format_financial_value(cf["capex"], sym)
+    if cf["capex"] is not None:
+        capex_display = "−" + capex_display   # Unicode minus for clarity
+    _line("Capital Expenditure",  capex_display)
+
+    print(sep)
+    _line("Free Cash Flow",       format_financial_value(cf["free_cash_flow"], sym))
+    print(sep)
+
+    # ---- Rule-based summary -------------------------------------
+    ocf  = cf.get("operating_cf")
+    capex = cf.get("capex")
+    fcf  = cf.get("free_cash_flow")
+
+    if ocf is not None and capex is not None and fcf is not None:
+        summary_text = (
+            f"The business generated {format_financial_value(ocf, sym)} in "
+            f"operating cash flow and {format_financial_value(fcf, sym)} in "
+            f"free cash flow after {format_financial_value(capex, sym)} of "
+            f"capital expenditure."
+        )
+    elif ocf is not None:
+        summary_text = (
+            f"The business generated {format_financial_value(ocf, sym)} in "
+            f"operating cash flow."
+        )
+        if fcf is not None:
+            summary_text += f" Free cash flow was {format_financial_value(fcf, sym)}."
+    else:
+        summary_text = ""
+
+    if summary_text:
+        print(textwrap.fill(
+            summary_text,
+            width=70,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        ))
+    print()
 
 
 def print_error(message: str) -> None:

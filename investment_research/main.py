@@ -20,6 +20,7 @@
 # We import our own modules from the same package.
 # The dot (.) means "from the current package (investment_research)".
 from . import fetcher
+from . import financials
 from . import display
 
 
@@ -81,10 +82,30 @@ def run() -> None:
             )
             continue
 
-        # All good — display the stock information.
-        # print_stock_info() shows the Phase 1 price snapshot.
-        # print_company_overview() shows the Phase 2 overview beneath it.
+        # All good — display Phase 1 and Phase 2 information.
         # Each function receives the same `data` dictionary; they each
         # just read the keys that belong to their section.
         display.print_stock_info(data)
         display.print_company_overview(data)
+
+        # Phase 3 — Financial Statements.
+        # financials.get_financial_statements() makes a separate set of
+        # yfinance calls (.financials, .balance_sheet, .cashflow) which
+        # return pandas DataFrames.  We wrap this in its own try/except
+        # so a failure here does not hide the Phase 1/2 output already
+        # printed above.
+        try:
+            fin = financials.get_financial_statements(ticker)
+        except Exception as error:
+            display.print_error(f"Could not retrieve financial statements: {error}")
+            continue
+
+        if fin is None:
+            # This should not happen (ticker already validated above),
+            # but we handle it defensively.
+            display.print_error("Financial statement data unavailable for this ticker.")
+            continue
+
+        display.print_income_statement(fin)
+        display.print_balance_sheet(fin)
+        display.print_cash_flow(fin)
