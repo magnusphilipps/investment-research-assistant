@@ -109,3 +109,17 @@ def run() -> None:
         display.print_income_statement(fin)
         display.print_balance_sheet(fin)
         display.print_cash_flow(fin)
+
+        # Feature 4 — Financial Ratios & Valuation.
+        # get_ratios() reuses the already-fetched `fin` dict for the
+        # calculated ratios and makes one additional ticker.info call
+        # for live market valuation metrics.
+        try:
+            ratios = financials.get_ratios(ticker, fin)
+        except Exception as error:
+            display.print_error(f"Could not compute financial ratios: {error}")
+            # We do not `continue` here — the main financial data was
+            # already printed above, so we just skip the ratios section
+            # and let the loop ask for the next ticker naturally.
+        else:
+            display.print_ratios(ratios, fin)

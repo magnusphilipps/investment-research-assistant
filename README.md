@@ -9,9 +9,11 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
-## Current Features (v3)
+## Current Features (v4)
 
 - Interactive terminal prompt — type a ticker, get results instantly
+- **Price snapshot:** company name, current share price, market capitalisation
+- **Company overview:** sector, industry, country, employee count, website, business description
 - **Price snapshot:** company name, current share price, market capitalisation
 - **Company overview:** sector, industry, country, employee count, website, business description
 - **Income statement:** revenue, gross profit, operating income, net income, EPS, diluted shares — up to four annual periods side by side
@@ -20,6 +22,10 @@ capability while keeping the code simple, modular, and well commented.
 - **Balance sheet:** cash, total debt, shareholders equity, D/E ratio, current assets/liabilities, current ratio, retained earnings
 - **Cash flow:** operating cash flow, capital expenditure, free cash flow
 - **Rule-based factual summaries** after each financial section — derived only from the displayed data, no qualitative claims
+- **Financial Ratios & Valuation** — three subsections:
+  - *Profitability:* EPS, net margin, operating margin, ROE, ROA
+  - *Financial Strength:* debt-to-equity, current ratio, cash-to-debt ratio
+  - *Market Valuation:* trailing P/E, forward P/E, PEG, enterprise value, EBITDA, EV/EBITDA, price-to-book
 - Values displayed in the company's reporting currency (USD, GBP, EUR, etc.)
 - Large figures formatted compactly: `$391.0B`, `£8.7M`, `-$3.7B`
 - Missing fields shown as `N/A` rather than crashing
@@ -131,6 +137,96 @@ from the computed data using `if/elif` logic — no language model or
 qualitative judgement is involved. They do not make any claim about
 financial safety, risk, or investment merit.
 
+---
+
+## Feature 4 — Financial Ratios & Valuation
+
+### Manually Calculated Ratios
+
+The following ratios are computed directly from the financial
+statement data already retrieved in Feature 3. No additional network
+call is made for these.
+
+#### Net Margin
+```
+Net Margin = Net Income / Revenue × 100
+```
+The percentage of revenue that remains as profit after all expenses
+including tax. A higher net margin means more of each revenue dollar
+reaches the bottom line.
+
+#### Return on Equity (ROE)
+```
+ROE = Net Income / Shareholders Equity × 100
+```
+Measures how much profit the company generates for every dollar of
+shareholder capital. Shown as N/A when equity is zero or negative,
+because the ratio becomes misleading in those cases (the same
+reasoning as Debt-to-Equity).
+
+#### Return on Assets (ROA)
+```
+ROA = Net Income / Total Assets × 100
+```
+Measures how efficiently the company's entire asset base generates
+profit. A higher ROA indicates the business needs fewer assets to
+produce the same earnings.
+
+#### Cash-to-Debt Ratio
+```
+Cash-to-Debt = Cash & Equivalents / Total Debt
+```
+Compares the company's liquid cash with its total debt load. A ratio
+of 1.0x would mean cash exactly covers the debt; below 1.0x means
+it does not.
+
+#### EV / EBITDA
+```
+EV / EBITDA = Enterprise Value / EBITDA
+```
+Calculated manually from the Enterprise Value and EBITDA figures
+retrieved from Yahoo Finance. Shown as N/A if either input is
+unavailable or zero.
+
+### Ratios Retrieved Directly from Yahoo Finance
+
+The following metrics are **not** recalculated from statements.
+They are read directly from `ticker.info` as returned by `yfinance`:
+
+| Metric | Yahoo Finance key | Why not recreated |
+|---|---|---|
+| Trailing P/E | `trailingPE` | Requires the live share price, which changes continuously |
+| Forward P/E | `forwardPE` | Uses analyst consensus EPS forecasts not available in statements |
+| PEG Ratio | `pegRatio` | Requires an earnings growth rate estimated by analysts |
+| Enterprise Value | `enterpriseValue` | Incorporates market capitalisation, which is live |
+| EBITDA | `ebitda` | Yahoo Finance computes this from multiple statement lines; replicating it exactly is error-prone |
+| Price-to-Book | `priceToBook` | Requires the live share price divided by book value per share |
+
+**Why retrieve rather than recreate?**
+Valuation metrics that include the share price or analyst estimates
+are inherently live figures. Recreating them from annual statement
+snapshots would give values that are hours or days stale and would
+not match what any financial data provider shows. Using the
+pre-computed values from Yahoo Finance gives results that are
+consistent with the source.
+
+### Feature 4 Limitations
+
+- **EV/EBITDA for banks and financial companies:** Yahoo Finance
+  often does not report EBITDA for banks (e.g. JPM), so EV/EBITDA
+  shows N/A. This is correct — EBITDA is not a standard metric for
+  financial institutions.
+- **NBIS (and other early-stage companies):** Negative EBITDA
+  produces a mathematically valid but practically uninterpretable
+  EV/EBITDA multiple. The application displays the computed figure
+  rather than suppressing it, so the user can see the sign.
+- **Forward P/E:** May be negative if the consensus forecast
+  projects a net loss. The value is shown as-is.
+- **ROE for negative-equity companies:** Shown as N/A to avoid
+  a misleading positive ratio caused by two negatives dividing.
+
+---
+
 ### Debt-to-Equity Ratio
 ```
 D/E Ratio = Total Debt / Shareholders Equity
@@ -202,9 +298,16 @@ one new concept without requiring changes to existing code.
 - Rule-based factual summary after each section
 - Multi-currency support; graceful N/A handling
 
-### Phase 4 — Key Statistics (planned)
+### Phase 4 — Financial Ratios & Valuation ✅
+- **Profitability:** EPS (diluted), net margin, operating margin, ROE, ROA
+- **Financial Strength:** debt-to-equity, current ratio, cash-to-debt ratio
+- **Market Valuation:** trailing P/E, forward P/E, PEG ratio, enterprise value, EBITDA, EV/EBITDA, price-to-book
+- Each ratio displayed with a one-sentence plain-English description
+- Calculated ratios derived from statements; market ratios sourced from Yahoo Finance
+
+### Phase 5 — Key Statistics (planned)
 - 52-week high / low
-- P/E ratio, dividend yield, beta
+- Dividend yield, beta
 
 ### Phase 5 — Watchlist (planned)
 - Save a list of tickers to a local file

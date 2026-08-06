@@ -372,6 +372,11 @@ def _compute_balance(df) -> dict:
         "Retained Earnings", "RetainedEarnings",
     ])
 
+    # Total assets are needed by get_ratios() to calculate ROA.
+    total_assets = _extract_value(df, [
+        "Total Assets", "TotalAssets",
+    ])
+
     # ---- Debt-to-equity ----------------------------------------
     de_ratio: float | None = None
     de_note:  str   | None = None
@@ -398,6 +403,7 @@ def _compute_balance(df) -> dict:
         "current_liabilities": current_liabilities,
         "current_ratio":      current_ratio,
         "retained_earnings":  retained_earnings,
+        "total_assets":       total_assets,
     }
 
 
@@ -528,4 +534,146 @@ def get_financial_statements(ticker_symbol: str) -> dict | None:
         "income":          _compute_income(income_df),
         "balance":         _compute_balance(balance_df),
         "cashflow":        _compute_cashflow(cashflow_df),
+    }
+
+
+# ------------------------------------------------------------
+# Feature 4 — Financial Ratios & Valuation Metrics
+# ------------------------------------------------------------
+
+def get_ratios(ticker_symbol: str, fin: dict) -> dict:
+    """
+    Compute financial ratios and retrieve market valuation metrics.
+
+    WHY THIS IS A SEPARATE FUNCTION:
+        Financial ratios mix two types of data:
+          - Calculated ratios (profitability, strength) come from
+            the statements already retrieved by get_financial_statements().
+            We reuse that data rather than fetching it again.
+          - Valuation metrics (P/E, PEG, EV, P/B) are live market
+            numbers that depend on the current share price and analyst
+            estimates.  They cannot be recreated from statements alone,
+            so we fetch them directly from ticker.info.
+
+    Parameters:
+        ticker_symbol : e.g. "AAPL"
+        fin           : The dict returned by get_financial_statements().
+                        We read its "income" and "balance" sub-dicts.
+
+    Returns:
+        A dict with three sub-dicts:
+            "profitability" : EPS, net margin, op margin, ROE, ROA
+            "strength"      : D/E, current ratio, cash-to-debt
+            "valuation"     : trailing P/E, forward P/E, PEG, EV,
+                              EBITDA, EV/EBITDA, price-to-book
+    """
+    # Guard: if get_financial_statements() returned an error sub-dict
+    # for income or balance, treat it as empty so we don't crash.
+    inc = fin.get("income", {})
+    bal = fin.get("balance", {})
+
+    if "error" in inc:
+        inc = {}
+    if "error" in bal:
+        bal = {}
+
+    # Helper: safely read the first element of a list, or None.
+    def _first(key: str, source: dict) -> float | None:
+        lst = source.get(key, [])
+        return lst[0] if lst else None
+
+    # ================================================================
+    # Section 1 — Profitability
+    # ================================================================
+    # All values derived from the income statement and balance sheet
+    # already fetched by get_financial_statements().
+
+    eps        = _first("eps_diluted", inc)
+    net_income = _first("net_income",  inc)
+    revenue    = _first("revenue",     inc)
+    op_margin  = _first("op_margin",   inc)  # already a percentage
+    equity     = bal.get("equity")
+    total_assets = bal.get("total_assets")
+
+    # Net Margin = Net Income / Revenue * 100
+    net_margin = _pct(net_income, revenue)
+
+    # Return on Equity = Net Income / Shareholders Equity * 100
+    # Not meaningful when equity is zero or negative (same reasoning
+    # as Debt-to-Equity in _compute_balance()).
+    if equity is not None and equity > 0:
+        roe = _pct(net_income, equity)
+    else:
+        roe = None
+
+    # Return on Assets = Net Income / Total Assets * 100
+    roa = _pct(net_income, total_assets)
+
+    profitability = {
+        "eps":        eps,
+        "net_margin": net_margin,
+        "op_margin":  op_margin,
+        "roe":        roe,
+        "roa":        roa,
+    }
+
+    # ================================================================
+    # Section 2 — Financial Strength
+    # ================================================================
+    # Reuse ratios already calculated in _compute_balance().
+
+    # Cash-to-Debt = Cash / Total Debt
+    # Measures how much of the debt load could be paid from cash alone.
+    cash_to_debt = _safe_divide(bal.get("cash"), bal.get("total_debt"))
+
+    strength = {
+        "de_ratio":     bal.get("de_ratio"),    # float or None
+        "de_note":      bal.get("de_note"),     # explanation or None
+        "current_ratio": bal.get("current_ratio"),
+        "cash_to_debt": cash_to_debt,
+    }
+
+    # ================================================================
+    # Section 3 — Market Valuation
+    # ================================================================
+    # These figures depend on the live share price and/or analyst
+    # estimates, so they cannot be derived from annual statements.
+    # We fetch them directly from ticker.info.
+    #
+    # yfinance keys used:
+    #   trailingPE       — trailing 12-month P/E
+    #   forwardPE        — forward P/E (analyst consensus)
+    #   pegRatio         — PEG (P/E divided by growth rate)
+    #   enterpriseValue  — market cap + debt − cash
+    #   ebitda           — as reported to Yahoo Finance
+    #   priceToBook      — market price / book value per share
+
+    try:
+        info = yf.Ticker(ticker_symbol).info or {}
+    except Exception:
+        info = {}
+
+    ev     = info.get("enterpriseValue")
+    ebitda = info.get("ebitda")
+
+    # EV/EBITDA: calculated manually here because the Yahoo Finance
+    # field ("enterpriseToEbitda") can lag or differ in rounding
+    # from the individual EV and EBITDA fields we already have.
+    # _safe_divide() returns None if either value is missing or zero.
+    ev_ebitda = _safe_divide(ev, ebitda)
+
+    valuation = {
+        "trailing_pe": info.get("trailingPE"),
+        "forward_pe":  info.get("forwardPE"),
+        "peg":         info.get("pegRatio"),
+        "ev":          ev,
+        "ebitda":      ebitda,
+        "ev_ebitda":   ev_ebitda,
+        "pb":          info.get("priceToBook"),
+    }
+
+    return {
+        "profitability": profitability,
+        "strength":      strength,
+        "valuation":     valuation,
     }

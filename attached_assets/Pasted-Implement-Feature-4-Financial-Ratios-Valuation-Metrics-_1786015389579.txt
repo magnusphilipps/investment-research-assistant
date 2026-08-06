@@ -1,0 +1,293 @@
+Implement Feature 4: Financial Ratios & Valuation Metrics.
+
+IMPORTANT GIT INSTRUCTIONS
+
+- Do not create any Git commit.
+- Do not push anything to GitHub.
+- Do not stage, amend, rebase, reset or otherwise modify Git history.
+- Make code and README changes only.
+- Leave all changes uncommitted so I can review, test, commit and push manually.
+
+OBJECTIVE
+
+Extend the Investment Research Assistant by adding a new section called:
+
+FINANCIAL RATIOS & VALUATION
+
+The purpose of this feature is to help a user quickly judge:
+
+1. Profitability
+2. Financial strength
+3. Market valuation
+
+This feature should build on the existing Feature 3 financial statements.
+
+Do not remove or alter any existing functionality.
+
+--------------------------------------------------------
+SECTION 1 – PROFITABILITY
+--------------------------------------------------------
+
+Display:
+
+• EPS (Diluted)
+• Net Margin
+• Operating Margin
+• Return on Equity (ROE)
+• Return on Assets (ROA)
+
+Calculate these ratios manually wherever possible using the financial statements already retrieved in Feature 3.
+
+Display:
+
+Ratio
+Value
+Brief explanation (1 sentence)
+
+Example:
+
+Return on Equity (ROE)
+
+31.4%
+
+Measures how efficiently the company generates profit from shareholder capital.
+
+--------------------------------------------------------
+SECTION 2 – FINANCIAL STRENGTH
+--------------------------------------------------------
+
+Display:
+
+• Debt-to-Equity
+• Current Ratio
+• Cash-to-Debt Ratio
+
+Reuse calculations already created where appropriate.
+
+Display:
+
+Ratio
+Value
+Brief explanation
+
+If a ratio cannot be calculated safely, display:
+
+N/A
+
+Do not invent or estimate values.
+
+--------------------------------------------------------
+SECTION 3 – MARKET VALUATION
+--------------------------------------------------------
+
+Display:
+
+• Trailing P/E
+• Forward P/E
+• PEG Ratio
+• Enterprise Value
+• EBITDA
+• EV / EBITDA
+• Price-to-Book (P/B)
+
+IMPORTANT
+
+Use Yahoo Finance directly for:
+
+- Trailing P/E
+- Forward P/E
+- PEG Ratio
+- Enterprise Value
+- EBITDA
+- Price-to-Book
+
+These depend on live market prices and/or analyst estimates and should not be recreated manually.
+
+Only calculate EV / EBITDA manually if Enterprise Value and EBITDA are both available.
+
+Otherwise display N/A.
+
+--------------------------------------------------------
+DESCRIPTIONS
+--------------------------------------------------------
+
+For every ratio include a concise explanation.
+
+Examples
+
+EPS
+
+Profit earned for each outstanding share.
+
+Net Margin
+
+Percentage of revenue that becomes profit after all expenses.
+
+Operating Margin
+
+Percentage of revenue remaining after operating expenses.
+
+ROE
+
+Measures how efficiently shareholder capital generates profit.
+
+ROA
+
+Measures how efficiently company assets generate profit.
+
+Debt-to-Equity
+
+Shows how much debt is used relative to shareholder capital.
+
+Current Ratio
+
+Measures the ability to pay short-term obligations.
+
+Cash-to-Debt Ratio
+
+Compares available cash with total debt.
+
+P/E
+
+How much investors pay for each dollar of earnings.
+
+Forward P/E
+
+Values the company using expected future earnings.
+
+PEG
+
+Adjusts the P/E ratio for expected earnings growth.
+
+Enterprise Value
+
+The total value of the business including debt and cash.
+
+EBITDA
+
+Operating earnings before interest, tax, depreciation and amortisation.
+
+EV / EBITDA
+
+Compares enterprise value with operating earnings.
+
+Price-to-Book
+
+Compares market value with accounting book value.
+
+--------------------------------------------------------
+DISPLAY
+--------------------------------------------------------
+
+Print a new section:
+
+==========================================================
+FINANCIAL RATIOS & VALUATION
+==========================================================
+
+Organise into:
+
+Profitability
+
+Financial Strength
+
+Market Valuation
+
+Keep formatting consistent with the rest of the application.
+
+--------------------------------------------------------
+ARCHITECTURE
+--------------------------------------------------------
+
+Continue following the existing architecture.
+
+financials.py
+
+- Retrieve any additional data.
+- Calculate ratios.
+- Return results in the financial dictionary.
+
+display.py
+
+- Format and display the ratios.
+- Do not perform calculations.
+
+main.py
+
+- Retrieve the ratios.
+- Call the new display function.
+
+Do not mix responsibilities between modules.
+
+--------------------------------------------------------
+DATA VALIDATION
+--------------------------------------------------------
+
+Never divide by zero.
+
+Handle missing data safely.
+
+Return N/A instead of misleading values.
+
+Handle banks and financial companies gracefully.
+
+Do not crash if Yahoo Finance does not provide a ratio.
+
+--------------------------------------------------------
+TESTING
+--------------------------------------------------------
+
+Test with:
+
+AAPL
+
+JPM
+
+NFLX
+
+NBIS
+
+One invalid ticker
+
+Verify:
+
+- Calculated ratios are correct.
+- Market valuation ratios match Yahoo Finance where available.
+- Missing ratios display N/A.
+- Banks still display meaningful output.
+- Existing Features 1–3 continue to work.
+
+--------------------------------------------------------
+README
+--------------------------------------------------------
+
+Update README.md.
+
+Mark Feature 4 as complete.
+
+Document:
+
+- Every new ratio.
+- The formula for every manually calculated ratio.
+- Which ratios come directly from Yahoo Finance.
+- Why market-based ratios are retrieved rather than recreated.
+- Any limitations.
+
+Keep the project roadmap updated.
+
+Do not create a Git commit.
+
+--------------------------------------------------------
+OUTPUT
+--------------------------------------------------------
+
+After implementation provide:
+
+1. Summary of Feature 4.
+2. Files modified.
+3. New functions added.
+4. Which ratios are manually calculated.
+5. Which ratios come directly from Yahoo Finance.
+6. Tests performed.
+7. Any limitations.
+8. Confirmation that no Git commit or push was performed.

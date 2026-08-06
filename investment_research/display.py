@@ -736,6 +736,182 @@ def print_cash_flow(fin: dict) -> None:
     print()
 
 
+def print_ratios(ratios: dict, fin: dict) -> None:
+    """
+    Print the Financial Ratios & Valuation section.
+
+    Organised into three subsections matching the three dicts returned
+    by financials.get_ratios():
+      1. Profitability  — EPS, margins, ROE, ROA
+      2. Financial Strength — D/E, current ratio, cash-to-debt
+      3. Market Valuation  — P/E, PEG, EV, EBITDA, EV/EBITDA, P/B
+
+    Each ratio is shown as:
+        Ratio Name                         Value
+          One-sentence description.
+
+    Parameters:
+        ratios (dict): Returned by financials.get_ratios().
+        fin    (dict): Returned by financials.get_financial_statements();
+                       used only for the currency symbol.
+    """
+    sym  = fin.get("currency_symbol", "$")
+    sep  = "=" * 58   # main section header
+    dash = "-" * 58   # subsection separator
+
+    print()
+    print(f"  {sep}")
+    print(f"  FINANCIAL RATIOS & VALUATION")
+    print(f"  {sep}")
+
+    def _ratio_line(label: str, value: str, description: str) -> None:
+        """
+        Print one ratio entry: label + right-aligned value, then a
+        description on the next line indented by four spaces.
+
+        The label is left-aligned in 34 characters; the value is
+        right-aligned in 14 characters, giving a total line width
+        of 2 (indent) + 34 + 14 = 50 characters.
+        """
+        print(f"  {label:<34}{value:>14}")
+        print(textwrap.fill(
+            description,
+            width=64,
+            initial_indent="    ",
+            subsequent_indent="    ",
+        ))
+        print()
+
+    # ================================================================
+    # Section 1 — Profitability
+    # ================================================================
+    prof = ratios.get("profitability", {})
+
+    print()
+    print(f"  Profitability")
+    print(f"  {dash}")
+    print()
+
+    _ratio_line(
+        "EPS (Diluted)",
+        format_eps(prof.get("eps"), sym),
+        "Profit earned for each outstanding share.",
+    )
+    _ratio_line(
+        "Net Margin",
+        format_percent(prof.get("net_margin")),
+        "Percentage of revenue that becomes profit after all expenses.",
+    )
+    _ratio_line(
+        "Operating Margin",
+        format_percent(prof.get("op_margin")),
+        "Percentage of revenue remaining after operating expenses.",
+    )
+    _ratio_line(
+        "Return on Equity (ROE)",
+        format_percent(prof.get("roe")),
+        "Measures how efficiently shareholder capital generates profit.",
+    )
+    _ratio_line(
+        "Return on Assets (ROA)",
+        format_percent(prof.get("roa")),
+        "Measures how efficiently company assets generate profit.",
+    )
+
+    # ================================================================
+    # Section 2 — Financial Strength
+    # ================================================================
+    strength = ratios.get("strength", {})
+
+    print(f"  Financial Strength")
+    print(f"  {dash}")
+    print()
+
+    # D/E ratio: may be a numeric float or a plain-text note (e.g.
+    # "Not meaningful (negative equity)") — mirror the balance sheet logic.
+    de_ratio = strength.get("de_ratio")
+    de_note  = strength.get("de_note")
+    de_value = f"{de_ratio:.2f}x" if de_ratio is not None else (de_note or "N/A")
+
+    _ratio_line(
+        "Debt-to-Equity",
+        de_value,
+        "Shows how much debt is used relative to shareholder capital.",
+    )
+
+    cr = strength.get("current_ratio")
+    _ratio_line(
+        "Current Ratio",
+        f"{cr:.2f}x" if cr is not None else "N/A",
+        "Measures the ability to pay short-term obligations.",
+    )
+
+    ctd = strength.get("cash_to_debt")
+    _ratio_line(
+        "Cash-to-Debt Ratio",
+        f"{ctd:.2f}x" if ctd is not None else "N/A",
+        "Compares available cash with total debt.",
+    )
+
+    # ================================================================
+    # Section 3 — Market Valuation
+    # ================================================================
+    # These values come directly from Yahoo Finance (ticker.info) and
+    # reflect live market prices and analyst estimates.
+    val = ratios.get("valuation", {})
+
+    print(f"  Market Valuation")
+    print(f"  {dash}")
+    print()
+
+    trailing_pe = val.get("trailing_pe")
+    forward_pe  = val.get("forward_pe")
+    peg         = val.get("peg")
+    ev          = val.get("ev")
+    ebitda      = val.get("ebitda")
+    ev_ebitda   = val.get("ev_ebitda")
+    pb          = val.get("pb")
+
+    _ratio_line(
+        "Trailing P/E",
+        f"{trailing_pe:.1f}x" if trailing_pe is not None else "N/A",
+        "How much investors pay for each dollar of earnings.",
+    )
+    _ratio_line(
+        "Forward P/E",
+        f"{forward_pe:.1f}x" if forward_pe is not None else "N/A",
+        "Values the company using expected future earnings.",
+    )
+    _ratio_line(
+        "PEG Ratio",
+        f"{peg:.2f}x" if peg is not None else "N/A",
+        "Adjusts the P/E ratio for expected earnings growth.",
+    )
+    _ratio_line(
+        "Enterprise Value",
+        format_financial_value(ev, sym),
+        "The total value of the business including debt and cash.",
+    )
+    _ratio_line(
+        "EBITDA",
+        format_financial_value(ebitda, sym),
+        "Operating earnings before interest, tax, depreciation and amortisation.",
+    )
+    _ratio_line(
+        "EV / EBITDA",
+        f"{ev_ebitda:.1f}x" if ev_ebitda is not None else "N/A",
+        "Compares enterprise value with operating earnings.",
+    )
+    _ratio_line(
+        "Price-to-Book (P/B)",
+        f"{pb:.2f}x" if pb is not None else "N/A",
+        "Compares market value with accounting book value.",
+    )
+
+    print(f"  {dash}")
+    print()
+
+
 def print_error(message: str) -> None:
     """
     Print a clearly labelled error message to the terminal.
