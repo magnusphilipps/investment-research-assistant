@@ -912,6 +912,94 @@ def print_ratios(ratios: dict, fin: dict) -> None:
     print()
 
 
+def format_price(value: float | None) -> str:
+    """Format a share price, or show ``N/A`` when it is unavailable."""
+    return f"${value:,.2f}" if value is not None else "N/A"
+
+
+def format_return(value: float | None) -> str:
+    """Format a decimal return as a signed percentage."""
+    if value is None:
+        return "N/A"
+    return f"{value:+.1%}"
+
+
+def format_distance(value: float | None) -> str:
+    """Format a non-directional percentage distance from a price range."""
+    return f"{value:.1%}" if value is not None else "N/A"
+
+
+def format_percentage_points(value: float | None) -> str:
+    """Format a return difference as signed percentage points."""
+    if value is None:
+        return "N/A"
+    return f"{value * 100:+.1f} pp"
+
+
+def print_performance(performance: dict) -> None:
+    """Print historical returns, the 52-week range, and S&P 500 comparison."""
+    separator = "-" * 58
+    returns = performance.get("returns", {})
+    price_range = performance.get("range", {})
+    benchmark = performance.get("benchmark", {})
+
+    print()
+    print(f"  {separator}")
+    print("  STOCK PRICE PERFORMANCE")
+    print(f"  {separator}")
+    for label in ("1 Month", "6 Months", "1 Year", "3 Years", "5 Years"):
+        print(f"  {label:<24}{format_return(returns.get(label)):>14}")
+
+    print()
+    print("  52-WEEK RANGE")
+    print(f"  {separator}")
+    print(f"  {'Current Price':<24}{format_price(price_range.get('current_price')):>14}")
+    print(f"  {'52-Week High':<24}{format_price(price_range.get('high')):>14}")
+    print(f"  {'52-Week Low':<24}{format_price(price_range.get('low')):>14}")
+    print(f"  {'Below 52-Week High':<24}{format_distance(price_range.get('below_high')):>14}")
+    print(f"  {'Above 52-Week Low':<24}{format_distance(price_range.get('above_low')):>14}")
+
+    print()
+    print("  VS S&P 500")
+    print(f"  {separator}")
+    print(f"  {'':<16}{'Stock':>14}{'S&P 500':>14}{'Difference':>14}")
+    for label in ("1 Year", "3 Years", "5 Years"):
+        values = benchmark.get(label, {})
+        print(
+            f"  {label:<16}{format_return(values.get('stock')):>14}"
+            f"{format_return(values.get('benchmark')):>14}"
+            f"{format_percentage_points(values.get('difference')):>14}"
+        )
+
+    summary = _performance_summary(performance)
+    if summary:
+        print()
+        print(textwrap.fill(summary, width=70, initial_indent="  ", subsequent_indent="  "))
+    print()
+
+
+def _performance_summary(performance: dict) -> str:
+    """Create a short factual summary from available performance values."""
+    returns = performance.get("returns", {})
+    comparison = performance.get("benchmark", {}).get("1 Year", {})
+    one_year = returns.get("1 Year")
+    difference = comparison.get("difference")
+
+    if one_year is not None and difference is not None:
+        direction = "outperformed" if difference >= 0 else "underperformed"
+        return (
+            f"The stock returned {format_return(one_year)} over the past year and "
+            f"{direction} the S&P 500 by {abs(difference) * 100:.1f} percentage points."
+        )
+    if one_year is not None:
+        return f"The stock returned {format_return(one_year)} over the past year."
+
+    missing_long_term = all(returns.get(label) is None for label in ("3 Years", "5 Years"))
+    if missing_long_term:
+        return "The stock does not have enough trading history for some long-term performance periods."
+    return "Some stock or benchmark performance comparisons are unavailable."
+
+
 def print_error(message: str) -> None:
     """
     Print a clearly labelled error message to the terminal.

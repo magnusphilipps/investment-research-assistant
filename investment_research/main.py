@@ -22,6 +22,7 @@
 from . import fetcher
 from . import financials
 from . import display
+from . import performance
 
 
 def run() -> None:
@@ -123,3 +124,16 @@ def run() -> None:
             # and let the loop ask for the next ticker naturally.
         else:
             display.print_ratios(ratios, fin)
+
+        # Feature 5 — Stock Price Performance.
+        # This is independent from financial statements, so a failed history
+        # request should not remove the Features 1-4 output above.
+        try:
+            price_performance = performance.get_performance(ticker)
+        except Exception as error:
+            display.print_error(f"Could not retrieve stock price performance: {error}")
+        else:
+            if price_performance is not None:
+                display.print_performance(price_performance)
+            else:
+                display.print_error("Stock price performance data unavailable for this ticker.")

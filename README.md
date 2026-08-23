@@ -9,7 +9,7 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
-## Current Features (v4)
+## Current Features (v5)
 
 - Interactive terminal prompt — type a ticker, get results instantly
 - **Price snapshot:** company name, current share price, market capitalisation
@@ -26,6 +26,9 @@ capability while keeping the code simple, modular, and well commented.
   - *Profitability:* EPS, net margin, operating margin, ROE, ROA
   - *Financial Strength:* debt-to-equity, current ratio, cash-to-debt ratio
   - *Market Valuation:* trailing P/E, forward P/E, PEG, enterprise value, EBITDA, EV/EBITDA, price-to-book
+- **Stock Price Performance:** adjusted historical returns for 1 month, 6 months, 1 year, 3 years, and 5 years
+- **52-week range:** current adjusted price, high, low, and distance from each boundary
+- **S&P 500 comparison:** 1-year, 3-year, and 5-year stock returns versus `^GSPC` in percentage points
 - Values displayed in the company's reporting currency (USD, GBP, EUR, etc.)
 - Large figures formatted compactly: `$391.0B`, `£8.7M`, `-$3.7B`
 - Missing fields shown as `N/A` rather than crashing
@@ -64,6 +67,7 @@ investment_research_assistant/
 │   ├── main.py                     # Application loop and user interaction
 │   ├── fetcher.py                  # Fetches price snapshot + overview via yfinance
 │   ├── financials.py               # Fetches, extracts, and calculates financial statements
+│   ├── performance.py               # Fetches adjusted prices and calculates performance metrics
 │   └── display.py                  # Formats and prints all output to the terminal
 │
 ├── README.md                       # This file
@@ -80,6 +84,7 @@ investment_research_assistant/
 | `investment_research/main.py` | The application loop. Reads user input, calls all modules, handles errors. |
 | `investment_research/fetcher.py` | Fetches price, market cap, and company overview from `ticker.info`. |
 | `investment_research/financials.py` | Fetches annual statements (DataFrames), extracts line items with fallback label lists, calculates margins/ratios/FCF. |
+| `investment_research/performance.py` | Fetches adjusted historical prices, calculates returns and the 52-week range, and compares the stock with the S&P 500. |
 | `investment_research/display.py` | All formatting and printing. Never calculates; only presents. |
 | `investment_research/__init__.py` | Empty marker file. Required by Python to treat the folder as an importable package. |
 
@@ -225,6 +230,60 @@ consistent with the source.
 - **ROE for negative-equity companies:** Shown as N/A to avoid
   a misleading positive ratio caused by two negatives dividing.
 
+## Feature 5 — Stock Price Performance
+
+Feature 5 adds a factual view of historical share-price performance. It
+uses adjusted historical prices from yfinance, so splits and other relevant
+adjustments do not distort the comparison.
+
+### Historical Returns
+
+The application displays returns for 1 month, 6 months, 1 year, 3 years,
+and 5 years. For each period it finds the latest available trading price on
+or before the target start date rather than assuming that every calendar date
+has a market price.
+
+```
+Return = (Ending Price / Starting Price) - 1
+```
+
+The ending price is the latest available adjusted close. If the company did
+not trade for the full period, the result is `N/A`; the application does not
+extrapolate a shorter history.
+
+### 52-Week Range
+
+The range uses the latest 52 calendar weeks of raw daily `High` and `Low`
+prices. It displays the latest closing price, the highest and lowest prices
+in that window, how far the current price is below the high, and how far it is
+above the low. This reflects the actual intraday trading range rather than
+only closing prices.
+
+### S&P 500 Comparison
+
+The stock's 1-year, 3-year, and 5-year returns are compared with the S&P 500
+Yahoo Finance ticker `^GSPC`. The difference is shown in percentage points:
+
+```
+Difference (pp) = Stock Return - S&P 500 Return
+```
+
+Each side uses the same period. If the stock or benchmark lacks sufficient
+history, that comparison is shown as `N/A`. A failed benchmark request does
+not hide the stock's own performance data.
+
+Newly listed companies may not have enough trading history for every period,
+so their longer-term returns and comparisons can be unavailable.
+
+Yahoo Finance also exposes `firstTradeDate` through yfinance history metadata.
+The application uses that as a conservative lower boundary when available.
+However, it describes the first trade Yahoo associates with a ticker's
+continuous price series, not necessarily the date the current company began
+trading. It cannot reliably distinguish predecessor or SPAC history after a
+business combination, so no company-specific cutoff is applied. In such
+cases, Yahoo's historical data may still make a long-term return appear
+available when the current company has not traded for that long.
+
 ---
 
 ### Debt-to-Equity Ratio
@@ -305,22 +364,23 @@ one new concept without requiring changes to existing code.
 - Each ratio displayed with a one-sentence plain-English description
 - Calculated ratios derived from statements; market ratios sourced from Yahoo Finance
 
-### Phase 5 — Key Statistics (planned)
-- 52-week high / low
-- Dividend yield, beta
+### Phase 5 — Stock Price Performance ✅
+- Adjusted historical returns for 1 month, 6 months, 1 year, 3 years, and 5 years
+- 52-week high / low and current price position
+- S&P 500 benchmark comparison for 1 year, 3 years, and 5 years
 
-### Phase 5 — Watchlist (planned)
+### Phase 6 — Watchlist (planned)
 - Save a list of tickers to a local file
 - Look up all tickers in the watchlist in one command
 
-### Phase 6 — Historical Prices (planned)
+### Phase 7 — Historical Prices (planned)
 - Fetch price history for a given period
 - Display a simple ASCII chart in the terminal
 
-### Phase 7 — Export (planned)
+### Phase 8 — Export (planned)
 - Save results to a CSV file for use in spreadsheets
 
-### Phase 8 — Web Interface (planned)
+### Phase 9 — Web Interface (planned)
 - Simple web UI using Flask or FastAPI
 - Display the same data in a browser
 
