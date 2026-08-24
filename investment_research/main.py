@@ -23,6 +23,7 @@ from . import fetcher
 from . import financials
 from . import display
 from . import performance
+from . import expectations
 
 
 def run() -> None:
@@ -137,3 +138,13 @@ def run() -> None:
                 display.print_performance(price_performance)
             else:
                 display.print_error("Stock price performance data unavailable for this ticker.")
+
+        # Feature 6 — Analyst Expectations & Forward Outlook
+        # Keep failures here non-fatal so earlier features remain visible.
+        try:
+            expectations_data = expectations.get_analyst_expectations(ticker)
+        except Exception as error:
+            display.print_error(f"Could not retrieve analyst expectations: {error}")
+        else:
+            # display.print_analyst_expectations handles N/A values itself
+            display.print_analyst_expectations(expectations_data)

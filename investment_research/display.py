@@ -135,7 +135,7 @@ def print_company_overview(data: dict) -> None:
 
     This function is called immediately after print_stock_info()
     in main.py. It receives the same `data` dictionary and reads
-    only the Phase 2 keys that belong to it.
+    only the Phase 2 keys that belong to its section.
 
     Parameters:
         data (dict): The dictionary returned by fetcher.get_stock_info()
@@ -186,6 +186,124 @@ def print_company_overview(data: dict) -> None:
 
     print(separator)
     print()  # Trailing blank line
+
+
+# ------------------------------------------------------------
+# Feature 6 — Analyst Expectations formatters & printer
+# ------------------------------------------------------------
+
+
+def format_price(value: float | None) -> str:
+    """
+    Format a share price as $x.xx or return "N/A" when missing.
+
+    This small helper keeps presentation logic out of the expectations
+    module — it only receives raw numeric values.
+    """
+    if value is None:
+        return "N/A"
+    return f"${value:,.2f}"
+
+
+def format_pct_fraction(frac: float | None) -> str:
+    """
+    Format a fractional percent (e.g. 0.114 → "+11.4%") used for implied
+    upside/downside. Returns "N/A" when missing.
+    """
+    if frac is None:
+        return "N/A"
+    sign = "+" if frac >= 0 else ""
+    return f"{sign}{frac:.1%}"
+
+
+def format_count(value: int | None) -> str:
+    """
+    Show integer counts or "N/A" when unavailable.
+    """
+    if value is None:
+        return "N/A"
+    return str(value)
+
+
+def print_analyst_expectations(expectations: dict) -> None:
+    """
+    Print the new Analyst Expectations & Forward Outlook section.
+
+    The function receives a structured dictionary from
+    investment_research.expectations.get_analyst_expectations()
+    and only handles formatting/printing. No calculations are performed
+    here — they belong in the expectations module.
+    """
+    sep = "-" * 52
+
+    pt = expectations.get("price_targets", {})
+    recs = expectations.get("recommendations", {}).get("counts", {})
+    rev = expectations.get("revenue_estimates", {})
+    summary = expectations.get("summary", [])
+
+    print()
+    print("  ANALYST EXPECTATIONS & FORWARD OUTLOOK")
+    print(sep)
+
+    # A. Analyst Price Targets
+    print("  ANALYST PRICE TARGETS")
+    print(sep)
+    print(f"  Current Price                     {format_price(pt.get('current_price'))}")
+    print(f"  Average Target                    {format_price(pt.get('average_target'))}")
+    print(f"  Median Target                     {format_price(pt.get('median_target'))}")
+    print(f"  High Target                       {format_price(pt.get('high_target'))}")
+    print(f"  Low Target                        {format_price(pt.get('low_target'))}")
+    print(f"  Analysts                          {format_count(pt.get('analysts'))}")
+    print(f"  Implied Upside                    {format_pct_fraction(pt.get('implied_upside'))}")
+
+    print(sep)
+
+    # B. Analyst Recommendations
+    print("  ANALYST RECOMMENDATIONS")
+    print(sep)
+    # print counts for each bucket, fallback to "N/A"
+    print(f"  Strong Buy                          {format_count(recs.get('Strong Buy'))}")
+    print(f"  Buy                                 {format_count(recs.get('Buy'))}")
+    print(f"  Hold                                {format_count(recs.get('Hold'))}")
+    print(f"  Sell                                {format_count(recs.get('Sell'))}")
+    print(f"  Strong Sell                         {format_count(recs.get('Strong Sell'))}")
+    consensus = expectations.get("recommendations", {}).get("consensus") or "N/A"
+    print()
+    print(f"  Consensus                           {consensus}")
+
+    print(sep)
+
+    # C. Revenue Expectations
+    print("  REVENUE EXPECTATIONS")
+    print(sep)
+    cy = rev.get('current_year', {})
+    ny = rev.get('next_year', {})
+    # Use existing financial-value formatter so large numbers are shown compactly
+    # e.g. 395_413_288_930 -> "$395.4B". Default to "$" symbol when unknown.
+    cy_rev = cy.get('revenue')
+    print(f"  Current Year Revenue              {format_financial_value(cy_rev)}")
+    # growth displayed as percent when available
+    g = cy.get('growth')
+    print(f"  Expected Growth                    {format_pct_fraction(g)}")
+    print()
+    ny_rev = ny.get('revenue')
+    print(f"  Next Year Revenue                 {format_financial_value(ny_rev)}")
+    g2 = ny.get('growth')
+    print(f"  Expected Growth                    {format_pct_fraction(g2)}")
+
+    print(sep)
+
+    # E. Short factual summary
+    print("  SHORT FACTUAL SUMMARY")
+    print(sep)
+    if summary:
+        for line in summary:
+            print(f"  {line}")
+    else:
+        print("  No analyst expectation data available.")
+
+    print(sep)
+    print()  # trailing blank line
 
 
 # ============================================================

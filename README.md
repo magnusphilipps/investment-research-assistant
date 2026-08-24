@@ -9,7 +9,9 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
-## Current Features (v5)
+## Current Features (v6)
+
+- **Analyst Expectations & Forward Outlook (Feature 6)**: Displays analyst price targets, recommendation counts, and (where available) forward revenue estimates. Shows current price, average/median/high/low analyst targets, number of analysts, and the implied upside/downside using (Target / Current) - 1. Recommendation counts are presented by category (Strong Buy / Buy / Hold / Sell / Strong Sell). Missing data is shown as `N/A`. This feature is purely factual: it surfaces analyst estimates and does not provide investment recommendations.
 
 - Interactive terminal prompt — type a ticker, get results instantly
 - **Price snapshot:** company name, current share price, market capitalisation
