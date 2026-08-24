@@ -1,7 +1,7 @@
 # Investment Research Assistant
 
 A Python console application for researching publicly traded companies.
-Enter a ticker symbol and it retrieves a price snapshot, company overview,
+Enter a ticker symbol, and it retrieves a price snapshot, company overview,
 and full financial statements from Yahoo Finance.
 
 This is a long-term learning project. Each version adds one layer of
@@ -14,8 +14,6 @@ capability while keeping the code simple, modular, and well commented.
 - **Analyst Expectations & Forward Outlook (Feature 6)**: Displays analyst price targets, recommendation counts, and (where available) forward revenue estimates. Shows current price, average/median/high/low analyst targets, number of analysts, and the implied upside/downside using (Target / Current) - 1. Recommendation counts are presented by category (Strong Buy / Buy / Hold / Sell / Strong Sell). Missing data is shown as `N/A`. This feature is purely factual: it surfaces analyst estimates and does not provide investment recommendations.
 
 - Interactive terminal prompt — type a ticker, get results instantly
-- **Price snapshot:** company name, current share price, market capitalisation
-- **Company overview:** sector, industry, country, employee count, website, business description
 - **Price snapshot:** company name, current share price, market capitalisation
 - **Company overview:** sector, industry, country, employee count, website, business description
 - **Income statement:** revenue, gross profit, operating income, net income, EPS, diluted shares — up to four annual periods side by side
