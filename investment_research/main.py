@@ -24,6 +24,7 @@ from . import financials
 from . import display
 from . import performance
 from . import expectations
+from . import peers
 
 
 def run() -> None:
@@ -125,6 +126,18 @@ def run() -> None:
             # and let the loop ask for the next ticker naturally.
         else:
             display.print_ratios(ratios, fin)
+
+        # Feature 7 — Peer Comparison (keeps failures non-fatal)
+        try:
+            peer_result = peers.fetch_peer_comparison(ticker)
+        except Exception as error:
+            display.print_error(f"Could not retrieve peer comparison: {error}")
+        else:
+            try:
+                display.print_peer_comparison(peer_result)
+            except Exception as error:
+                # Ensure any display error here does not stop other features
+                display.print_error(f"Could not display peer comparison: {error}")
 
         # Feature 5 — Stock Price Performance.
         # This is independent from financial statements, so a failed history

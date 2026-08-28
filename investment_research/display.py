@@ -27,13 +27,94 @@
 # textwrap is part of Python's standard library — no installation needed.
 # It provides utilities for wrapping and filling text to a fixed width,
 # which is useful when printing long paragraphs in a terminal.
+import math
+import re
 import textwrap
+
+import pandas as pd
 
 # ---- Layout constants for Phase 3 financial tables ----------
 # Keeping these as module-level constants means you only need to
 # change one number to reformat every financial table at once.
 _LABEL_WIDTH = 24   # characters reserved for the row label column
 _COL_WIDTH   = 12   # characters per year column (right-aligned values)
+
+
+def _normalize_zero(value):
+    """Return a canonical zero for floating-point artefacts like -0.0."""
+    if value is None:
+        return None
+
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return value
+
+    if math.isclose(numeric, 0.0, abs_tol=1e-12):
+        return 0.0
+    return numeric
+
+
+def _is_missing_value(value) -> bool:
+    """Return True when a number-like value is missing or unusable.
+
+    This is used for Feature 7 display values so that NaN/None values never
+    print as a number with a suffix like "nanx" or "nan%".
+    """
+    if value is None:
+        return True
+
+    # Pandas/NumPy scalar missing values should be treated as missing.
+    try:
+        if pd.isna(value):
+            return True
+    except Exception:
+        pass
+
+    # Plain Python floats may still be NaN or inf.
+    try:
+        numeric = float(_normalize_zero(value))
+        if not math.isfinite(numeric):
+            return True
+    except (TypeError, ValueError):
+        return False
+
+    return False
+
+
+def shorten_description(text: str | None, max_sentences: int = 4, max_chars: int = 400) -> str:
+    """Deterministically shorten a long company description.
+
+    The function keeps complete sentences only, never cutting a sentence in
+    the middle. It also avoids adding trailing ellipses, which would make the
+    output look unfinished.
+    """
+    if not text:
+        return ""
+
+    cleaned = " ".join(text.split())
+    sentences = [part.strip() for part in re.split(r'(?<=[.!?])\s+', cleaned) if part.strip()]
+    if not sentences:
+        return ""
+
+    kept: list[str] = []
+    length = 0
+    for sentence in sentences:
+        candidate = " ".join(kept + [sentence]) if kept else sentence
+        if len(candidate) > max_chars and kept:
+            break
+        kept.append(sentence)
+        length = len(candidate)
+        if len(kept) >= max_sentences:
+            break
+
+    # If the first 3–4 sentences still exceed the limit because a single sentence is too long,
+    # keep the sentence whole (not truncated mid-sentence). This is still more readable than a
+    # trailing ellipsis caused by character-based truncation.
+    if not kept:
+        kept = [sentences[0]]
+
+    return " ".join(kept)
 
 
 def format_market_cap(market_cap: int | None) -> str:
@@ -160,27 +241,21 @@ def print_company_overview(data: dict) -> None:
     print(separator)
 
     # --- Business description ---
-    # Business descriptions from Yahoo Finance are often several hundred
-    # words long. Printing them as one unbroken line is hard to read.
-    # textwrap.fill() wraps a long string to a maximum line width and
-    # returns it as a single string with newline characters inserted.
-    #
-    # textwrap.fill(text, width, initial_indent, subsequent_indent):
-    #   - width             : maximum characters per line
-    #   - initial_indent    : prefix added to the very first line
-    #   - subsequent_indent : prefix added to every line after the first
-    #
-    # Both indents use two spaces so the text aligns with the fields above.
     description = data.get("description")
 
     if description:
-        wrapped = textwrap.fill(
-            description,
-            width=70,
-            initial_indent="  ",
-            subsequent_indent="  ",
-        )
-        print(wrapped)
+        # Produce a deterministic 3–4 sentence summary for readability.
+        short = shorten_description(description, max_sentences=4, max_chars=400)
+        if short:
+            wrapped = textwrap.fill(
+                short,
+                width=70,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            )
+            print(wrapped)
+        else:
+            print("  No description available.")
     else:
         print("  No description available.")
 
@@ -210,7 +285,7 @@ def format_pct_fraction(frac: float | None) -> str:
     Format a fractional percent (e.g. 0.114 → "+11.4%") used for implied
     upside/downside. Returns "N/A" when missing.
     """
-    if frac is None:
+    if _is_missing_value(frac):
         return "N/A"
     sign = "+" if frac >= 0 else ""
     return f"{sign}{frac:.1%}"
@@ -220,7 +295,7 @@ def format_count(value: int | None) -> str:
     """
     Show integer counts or "N/A" when unavailable.
     """
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
     return str(value)
 
@@ -310,6 +385,79 @@ def print_analyst_expectations(expectations: dict) -> None:
 # Phase 3 — Financial Statement Formatters and Printers
 # ============================================================
 
+
+def print_peer_comparison(result: dict) -> None:
+    """Print the compact peer comparison table and a short factual summary.
+
+    Parameters:
+        result: The dict returned by investment_research.peers.fetch_peer_comparison()
+    """
+    sep = "-" * 64
+    print()
+    print("  PEER COMPARISON")
+    print(sep)
+
+    if not result.get("available"):
+        # Clean message when no peer mapping exists.
+        print(f"  {result.get('message', 'Peer comparison unavailable for this company.')}")
+        print(sep)
+        print()
+        return
+
+    tickers = result.get("tickers", [])
+    df = result.get("df")
+    summary = result.get("summary", [])
+
+    # Header row: empty label column then tickers
+    header = f"  {'':<{_LABEL_WIDTH}}" + "".join(f"{t:>{_COL_WIDTH}}" for t in tickers)
+    print(header)
+    print()
+
+    def _fmt_ratio(value, digits=1, suffix="x"):
+        value = _normalize_zero(value)
+        if _is_missing_value(value) or (isinstance(value, (int, float)) and float(value) < 0):
+            return "N/A"
+        return f"{float(value):.{digits}f}{suffix}"
+
+    # Revenue Growth (show sign)
+    rg_cells = [format_growth(v) if not _is_missing_value(v) else "N/A" for v in df.loc['Revenue Growth']]
+    print(_table_row("Revenue Growth", rg_cells))
+
+    # Operating Margin
+    om_cells = [format_percent(v) if not _is_missing_value(v) else "N/A" for v in df.loc['Operating Margin']]
+    print(_table_row("Operating Margin", om_cells))
+
+    # ROE
+    roe_cells = [format_percent(v) if not _is_missing_value(v) else "N/A" for v in df.loc['ROE']]
+    print(_table_row("ROE", roe_cells))
+    print()
+
+    # Debt / Equity — show as "Nx" when numeric
+    de_cells = [_fmt_ratio(v, 2, "x") if not _is_missing_value(v) else "N/A" for v in df.loc['Debt/Equity']]
+    print(_table_row("Debt / Equity", de_cells))
+
+    # P/E, Forward P/E, EV/EBITDA
+    pe_cells = [_fmt_ratio(v, 1, "x") if not _is_missing_value(v) else "N/A" for v in df.loc['P/E']]
+    fpe_cells = [_fmt_ratio(v, 1, "x") if not _is_missing_value(v) else "N/A" for v in df.loc['Forward P/E']]
+    ev_ebitda_cells = [_fmt_ratio(v, 1, "x") if not _is_missing_value(v) else "N/A" for v in df.loc['EV/EBITDA']]
+
+    print(_table_row("P/E", pe_cells))
+    print(_table_row("Forward P/E", fpe_cells))
+    print(_table_row("EV / EBITDA", ev_ebitda_cells))
+
+    print(sep)
+
+    # Short factual summary (1–2 sentences provided by peers module)
+    if summary:
+        for line in summary:
+            print(f"  {line}")
+    else:
+        print("  No peer summary available.")
+
+    print(sep)
+    print()
+
+
 def format_financial_value(value: float | None, symbol: str = "$") -> str:
     """
     Format a raw financial figure into a compact, readable string.
@@ -329,7 +477,7 @@ def format_financial_value(value: float | None, symbol: str = "$") -> str:
     Returns:
         A compact formatted string.
     """
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
 
     # Handle negative values: extract the sign separately so we can
@@ -361,9 +509,10 @@ def format_percent(value: float | None) -> str:
         -3.1   →  "-3.1%"
         None   →  "N/A"
     """
-    if value is None:
+    value = _normalize_zero(value)
+    if _is_missing_value(value):
         return "N/A"
-    return f"{value:.1f}%"
+    return f"{float(value):.1f}%"
 
 
 def format_growth(value: float | None) -> str:
@@ -379,10 +528,13 @@ def format_growth(value: float | None) -> str:
         -2.80  →  "-2.8%"
          None  →  "N/A"
     """
-    if value is None:
+    value = _normalize_zero(value)
+    if _is_missing_value(value):
         return "N/A"
-    sign = "+" if value >= 0 else ""
-    return f"{sign}{value:.1f}%"
+    if value == 0:
+        return "0.0%"
+    sign = "+" if value > 0 else "-"
+    return f"{sign}{abs(float(value)):.1f}%"
 
 
 def format_margin_change(value: float | None) -> str:
@@ -399,7 +551,7 @@ def format_margin_change(value: float | None) -> str:
         -1.2  →  "-1.2 pp"
         None  →  "N/A"
     """
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
     sign = "+" if value >= 0 else ""
     return f"{sign}{value:.1f} pp"
@@ -437,7 +589,7 @@ def format_eps(value: float | None, symbol: str = "$") -> str:
         -1.25  →  "-$1.25"
         None   →  "N/A"
     """
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
     sign    = "-" if value < 0 else ""
     abs_val = abs(value)
@@ -457,7 +609,7 @@ def format_shares(value: float | None) -> str:
            800_000_000  →  "800.0M"
                   None  →  "N/A"
     """
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
     abs_val = abs(value)
     if abs_val >= 1e9:
@@ -1032,24 +1184,24 @@ def print_ratios(ratios: dict, fin: dict) -> None:
 
 def format_price(value: float | None) -> str:
     """Format a share price, or show ``N/A`` when it is unavailable."""
-    return f"${value:,.2f}" if value is not None else "N/A"
+    return f"${value:,.2f}" if not _is_missing_value(value) else "N/A"
 
 
 def format_return(value: float | None) -> str:
     """Format a decimal return as a signed percentage."""
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
     return f"{value:+.1%}"
 
 
 def format_distance(value: float | None) -> str:
     """Format a non-directional percentage distance from a price range."""
-    return f"{value:.1%}" if value is not None else "N/A"
+    return f"{value:.1%}" if not _is_missing_value(value) else "N/A"
 
 
 def format_percentage_points(value: float | None) -> str:
     """Format a return difference as signed percentage points."""
-    if value is None:
+    if _is_missing_value(value):
         return "N/A"
     return f"{value * 100:+.1f} pp"
 

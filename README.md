@@ -404,3 +404,83 @@ pip install -r requirements.txt
 ## Python Version
 
 Python 3.10 or later (uses `X | Y` union type hints).
+
+# Learning Guide
+
+This Learning Guide summarizes each feature, the main files involved, and the key Python/pandas concepts used while building them. It is aimed at a developer learning Python.
+
+## Feature 1 — Foundation
+- What it does: Basic ticker lookup and price snapshot.
+- Main files: `fetcher.py`, `run.py`, `main.py`.
+- Key concepts: calling library functions (`yfinance`), dictionaries, simple I/O (`input()` / `print()`).
+- Suggestion: study how `fetcher.get_stock_info()` gathers `ticker.info`.
+
+## Feature 2 — Company Overview
+- What it does: Shows sector, industry, country, employees, website and a shortened business description.
+- Main files: `fetcher.py`, `display.py`.
+- Key concepts: string handling, text wrapping (`textwrap.fill()`), deterministic sentence splitting for a short description (`shorten_description()` in `display.py`).
+- Note: The long yfinance description is kept in the backend but displayed in a shortened 3–4 sentence paragraph for readability.
+
+## Feature 3 — Financial Statements
+- What it does: Fetches annual income, balance sheet and cash flow statements and extracts key line items.
+- Main files: `financials.py`, `display.py`.
+- Key concepts: pandas DataFrames returned by `yfinance`, robust row label lookup via ranked candidate labels, safe arithmetic (`_safe_divide()`), percentage calculations (`_pct()`).
+- Suggestion: study `_extract_value()` for defensive data extraction from DataFrames.
+
+## Feature 4 — Financial Ratios & Valuation
+- What it does: Computes profitability, strength and valuation metrics by reusing the statements already retrieved.
+- Main files: `financials.py`, `display.py`.
+- Key concepts: reusing computed data rather than refetching, live market metrics from `ticker.info`, and distinction between derived ratios and market-derived valuations.
+- Suggestion: study `get_ratios()` to see how statement-derived ratios and `yfinance`-derived valuation metrics are combined.
+
+## Feature 5 — Stock Price Performance
+- What it does: Computes adjusted historical returns, 52-week range, and S&P 500 comparisons.
+- Main files: `performance.py`, `display.py`.
+- Key concepts: working with time-series price data, handling missing history gracefully, percentage-return calculations.
+
+## Feature 6 — Analyst Expectations & Forward Outlook
+- What it does: Shows analyst price targets, recommendation counts and revenue estimates where available.
+- Main files: `expectations.py`, `display.py`.
+- Key concepts: structured dictionaries for presenting grouped data; formatting helpers like `format_price()` and `format_pct_fraction()`.
+
+## Feature 7 — Peer Comparison (added)
+- What it does: Compares the selected company with three manually configured peers on a compact set of metrics and prints a very short factual summary.
+- Main files: `investment_research/peers.py`, `investment_research/display.py`, `investment_research/main.py`.
+- Metrics compared: Revenue Growth (most recent YoY), Operating Margin, ROE, Debt-to-Equity, P/E (trailing), Forward P/E, EV/EBITDA.
+- Peer selection: Manually configured in `PEERS` inside `investment_research/peers.py`. This keeps selection simple and editable.
+- Implementation notes:
+  - `peers.fetch_peer_comparison(ticker)` builds a pandas DataFrame of raw numeric values (or None) for the target + three peers and returns a short rule-based summary.
+  - The display layer formats values (percent, x.xx multiples) and prints a compact table using existing `display.py` helpers.
+  - Missing values are represented as `N/A` in the output; missing peers show a clear message rather than crashing.
+- Why it’s educational: demonstrates how to reuse existing functions (`get_financial_statements` and `get_ratios`), how to handle incomplete data defensively, and how to separate data from presentation.
+
+### How the long yfinance company description was shortened
+- The original description remains available in the data returned by the fetcher.
+- Display uses a deterministic function `shorten_description()` in `display.py` that:
+  1. Cleans whitespace.
+  2. Splits sentences using a simple regex.
+  3. Keeps the first 3–4 sentences up to a character limit and wraps them for the terminal.
+- No external AI or LLM is used — the method is deterministic and explainable.
+
+---
+
+# Feature 7 — Peer Comparison (Documentation)
+
+- The first implementation uses a manual peer map in `investment_research/peers.py`:
+
+```python
+PEERS = {
+    "NVDA": ["AMD", "AVGO", "INTC"],
+    "AAPL": ["MSFT", "GOOGL", "AMZN"],
+    "JPM":  ["BAC", "WFC", "C"],
+    "NFLX": ["DIS", "CMCSA", "PARA"],
+}
+```
+
+- It compares the target and each peer on the metrics listed above, displaying a compact terminal table and a 1–2 sentence rule-based factual summary (for example, which company has the highest revenue growth).
+- The implementation intentionally does NOT calculate peer medians, averages, or rankings beyond the simple factual statements. It is designed as a focused comparison tool rather than a peer-universe analysis.
+
+---
+
+(End of Learning Guide)
+
