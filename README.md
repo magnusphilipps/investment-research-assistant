@@ -9,7 +9,7 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
-## Current Features (v6)
+## Current Features (v8)
 
 - **Analyst Expectations & Forward Outlook (Feature 6)**: Displays analyst price targets, recommendation counts, and (where available) forward revenue estimates. Shows current price, average/median/high/low analyst targets, number of analysts, and the implied upside/downside using (Target / Current) - 1. Recommendation counts are presented by category (Strong Buy / Buy / Hold / Sell / Strong Sell). Missing data is shown as `N/A`. This feature is purely factual: it surfaces analyst estimates and does not provide investment recommendations.
 
@@ -29,6 +29,7 @@ capability while keeping the code simple, modular, and well commented.
 - **Stock Price Performance:** adjusted historical returns for 1 month, 6 months, 1 year, 3 years, and 5 years
 - **52-week range:** current adjusted price, high, low, and distance from each boundary
 - **S&P 500 comparison:** 1-year, 3-year, and 5-year stock returns versus `^GSPC` in percentage points
+- **Recent News & Developments (Feature 8):** up to three recent English-language, company-specific Marketaux articles with source, date, concise description, and original URL
 - Values displayed in the company's reporting currency (USD, GBP, EUR, etc.)
 - Large figures formatted compactly: `$391.0B`, `£8.7M`, `-$3.7B`
 - Missing fields shown as `N/A` rather than crashing
@@ -67,6 +68,7 @@ investment_research_assistant/
 │   ├── main.py                     # Application loop and user interaction
 │   ├── fetcher.py                  # Fetches price snapshot + overview via yfinance
 │   ├── financials.py               # Fetches, extracts, and calculates financial statements
+│   ├── news.py                     # Fetches and standardises Marketaux news
 │   ├── performance.py               # Fetches adjusted prices and calculates performance metrics
 │   └── display.py                  # Formats and prints all output to the terminal
 │
@@ -84,8 +86,9 @@ investment_research_assistant/
 | `investment_research/main.py` | The application loop. Reads user input, calls all modules, handles errors. |
 | `investment_research/fetcher.py` | Fetches price, market cap, and company overview from `ticker.info`. |
 | `investment_research/financials.py` | Fetches annual statements (DataFrames), extracts line items with fallback label lists, calculates margins/ratios/FCF. |
+| `investment_research/news.py` | Reads `MARKETAUX_API_KEY`, requests recent Marketaux news, standardises article metadata, and handles API failures. |
 | `investment_research/performance.py` | Fetches adjusted historical prices, calculates returns and the 52-week range, and compares the stock with the S&P 500. |
-| `investment_research/display.py` | All formatting and printing. Never calculates; only presents. |
+| `investment_research/display.py` | All formatting and printing, including Feature 8 article links and URL fallbacks. |
 | `investment_research/__init__.py` | Empty marker file. Required by Python to treat the folder as an importable package. |
 
 ---
@@ -377,10 +380,18 @@ one new concept without requiring changes to existing code.
 - Fetch price history for a given period
 - Display a simple ASCII chart in the terminal
 
-### Phase 8 — Export (planned)
+### Phase 8 — Recent News & Developments ✅
+- Recent company-specific English-language news from Marketaux
+- Up to three recent articles per ticker, filtered by ticker/entity association
+- Source, UTC-formatted publication date, concise description, and original URL
+- Clickable headlines in terminals supporting OSC-8 links, with URL fallback
+- Graceful handling for missing keys, API errors, empty responses, malformed data, and duplicates
+- No AI analysis, sentiment judgement, or investment recommendation
+
+### Phase 9 — Export (planned)
 - Save results to a CSV file for use in spreadsheets
 
-### Phase 9 — Web Interface (planned)
+### Phase 10 — Web Interface (planned)
 - Simple web UI using Flask or FastAPI
 - Display the same data in a browser
 
@@ -392,6 +403,7 @@ one new concept without requiring changes to existing code.
 |---|---|
 | `yfinance` | Fetches stock data and financial statements from Yahoo Finance |
 | `pandas` | Installed automatically with yfinance; used to work with DataFrame results |
+| `requests` | Sends the single Marketaux REST API request for recent news |
 
 Install all dependencies with:
 
@@ -453,6 +465,119 @@ This Learning Guide summarizes each feature, the main files involved, and the ke
   - The display layer formats values (percent, x.xx multiples) and prints a compact table using existing `display.py` helpers.
   - Missing values are represented as `N/A` in the output; missing peers show a clear message rather than crashing.
 - Why it’s educational: demonstrates how to reuse existing functions (`get_financial_statements` and `get_ratios`), how to handle incomplete data defensively, and how to separate data from presentation.
+
+## Feature 8 — Recent News & Developments
+
+### What it does
+Feature 8 retrieves up to three recent, company-specific financial-news
+articles from Marketaux when a ticker is searched. It shows each article's
+headline, publisher, publication date, short API-provided description, and
+original URL. It does not interpret the news or make an investment judgement.
+
+### Main files and data flow
+```text
+Ticker
+  ↓
+Marketaux REST request
+  ↓
+JSON response
+  ↓
+news.py cleans and standardises article metadata
+  ↓
+main.py orchestrates
+  ↓
+display.py formats the section and headline links
+  ↓
+terminal
+```
+
+- `investment_research/news.py` reads `MARKETAUX_API_KEY`, sends one
+  economical request to Marketaux, validates the response, removes duplicates,
+  shortens descriptions, and returns simple article dictionaries.
+- `main.py` calls `news.get_company_news(ticker)` after the existing features
+  and keeps news failures isolated from the rest of the report.
+- `display.py` uses `print_news()` to print the section, dates, descriptions,
+  and URL fallback without making API requests or reading secrets.
+
+### Important Python and API concepts
+- **Dictionaries and lists:** the JSON response contains a list of article
+  dictionaries; `news.py` converts each one to the small internal structure
+  `title`, `source`, `published_at`, `description`, and `url`.
+- **Functions:** each function has one job, such as cleaning text,
+  formatting dates, standardising an article, or removing duplicates.
+- **`try/except`:** network failures, timeouts, bad HTTP status codes, and
+  malformed JSON return an unavailable result instead of crashing the app.
+- **Environment variables:** the API key is read with
+  `os.environ.get("MARKETAUX_API_KEY")`; the key is never written in source,
+  README, tests, or output. In Replit, add it through Replit Secrets.
+- **HTTP requests and JSON:** a request sends an endpoint, parameters, and
+  an API key; the HTTP status and JSON response must both be validated.
+  A timeout prevents a slow external service from blocking the whole report.
+- **Datetime parsing:** an ISO/UTC timestamp such as
+  `2026-09-02T14:32:17Z` becomes `2 Sep 2026`; malformed dates become
+  `Date unavailable`.
+- **Marketaux `match_score`:** this is the provider's deterministic estimate
+  of how strongly an entity is associated with an article. A ticker association
+  alone is not enough because broad market stories can mention many companies
+  incidentally.
+- **Optional values:** missing descriptions, publishers, dates, and URLs
+  are kept missing and displayed with a concise fallback rather than being
+  replaced with invented content.
+- **Rate limits:** Marketaux limits requests on some plans, so one normal
+  ticker lookup makes only one news request and tests use fake responses.
+
+### Relevance, recency, duplicates, and hyperlinks
+The request uses these documented Marketaux parameters:
+
+```text
+symbols=<TICKER>
+filter_entities=true
+must_have_entities=true
+min_match_score=50.0
+language=en
+limit=3
+published_after=<UTC time 14 days ago>
+sort=entity_match_score
+sort_order=desc
+group_similar=true
+```
+
+The old `sort=published_desc` value was not a documented Marketaux option.
+The request now keeps results recent with a rolling 14-day `published_after`
+window, then ranks the remaining results by `entity_match_score` descending.
+This is a deliberate trade-off: a shorter window improves recency but may
+return fewer articles, while score filtering rejects broad market stories
+instead of filling all three slots with weak matches.
+
+`MIN_RELEVANCE_MATCH_SCORE = 50.0` is a clearly named v1 heuristic. The
+documentation examples include body-only associations around 10–40 and strong
+company-focused/title associations above 50, so this threshold is intended
+to reject incidental mentions while retaining stronger company stories. It
+can be tuned later if more real responses justify a change.
+
+The local filter requires an exact entity symbol match and a numeric
+`match_score` at or above the threshold. Missing scores are rejected safely.
+If Marketaux includes an entity list, the app does not match ambiguous ticker
+letters in headline text. Repeated URLs and normalised headlines are removed
+locally.
+
+When the terminal supports OSC-8 hyperlinks, `format_news_headline()` wraps
+the visible headline in a terminal link escape sequence. Otherwise the
+headline remains plain text and its original URL is printed beneath it.
+An article with no valid URL is still displayed without a broken link.
+
+### Defensive programming and testing
+The output distinguishes an unavailable service from a successful empty
+response: `Recent news temporarily unavailable.` versus
+`No recent company-specific news found.`. A malformed individual article is
+skipped while other valid articles remain visible.
+
+`tests/test_news.py` uses mocked `requests.get()` responses. This tests valid
+responses, fewer than three articles, empty data, missing keys, HTTP errors,
+timeouts, malformed JSON, missing fields, duplicates, dates, hyperlinks, and
+fallback output without using the daily Marketaux allowance.
+
+---
 
 ### How the long yfinance company description was shortened
 - The original description remains available in the data returned by the fetcher.

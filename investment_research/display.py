@@ -28,7 +28,9 @@
 # It provides utilities for wrapping and filling text to a fixed width,
 # which is useful when printing long paragraphs in a terminal.
 import math
+import os
 import re
+import sys
 import textwrap
 
 import pandas as pd
@@ -1268,6 +1270,109 @@ def _performance_summary(performance: dict) -> str:
     if missing_long_term:
         return "The stock does not have enough trading history for some long-term performance periods."
     return "Some stock or benchmark performance comparisons are unavailable."
+
+
+def _supports_terminal_hyperlinks() -> bool:
+    """Return whether this output stream is likely to support OSC-8 links."""
+    return sys.stdout.isatty() and os.environ.get("TERM", "").lower() not in ("", "dumb")
+
+
+def format_news_headline(
+    title: str,
+    url: str | None,
+    supports_hyperlinks: bool | None = None,
+) -> str:
+    """
+    Make a headline clickable when the terminal supports OSC-8 hyperlinks.
+
+    OSC-8 wraps visible text in an invisible terminal escape sequence:
+    ``ESC ] 8 ;; URL BEL`` ... ``ESC ] 8 ;; BEL``. Plain text is returned
+    when no valid URL exists or when hyperlinks are not supported.
+    """
+    if not url:
+        return title
+    if supports_hyperlinks is None:
+        supports_hyperlinks = _supports_terminal_hyperlinks()
+    if not supports_hyperlinks:
+        return title
+    return f"\033]8;;{url}\a{title}\033]8;;\a"
+
+
+def print_news(result: dict) -> None:
+    """
+    Print the Feature 8 recent-news section.
+
+    The news module owns fetching and cleaning. This function only formats
+    the already-standardised result and shows a URL fallback when OSC-8
+    terminal links are unavailable.
+    """
+    separator = "-" * 64
+
+    print()
+    print("  RECENT NEWS & DEVELOPMENTS")
+    print(separator)
+
+    status = result.get("status") if isinstance(result, dict) else "unavailable"
+    if status == "unavailable":
+        message = (
+            result.get("message")
+            if isinstance(result, dict)
+            else "Recent news temporarily unavailable."
+        )
+        print(f"  {message or 'Recent news temporarily unavailable.'}")
+        print(separator)
+        print()
+        return
+
+    if status == "empty":
+        print("  No recent company-specific news found.")
+        print(separator)
+        print()
+        return
+
+    articles = result.get("articles", []) if isinstance(result, dict) else []
+    if not isinstance(articles, list):
+        articles = []
+
+    hyperlink_support = _supports_terminal_hyperlinks()
+    displayed_count = 0
+    for article in articles:
+        if not isinstance(article, dict):
+            continue
+        title = str(article.get("title") or "").strip()
+        if not title:
+            continue
+
+        displayed_count += 1
+        url = article.get("url")
+        headline = format_news_headline(title, url, hyperlink_support)
+        print(f"  {displayed_count}. {headline}")
+
+        source = str(article.get("source") or "Source unavailable").strip()
+        # The date parser lives with the API-data module; terminal formatting
+        # remains in this presentation module.
+        from .news import format_article_date
+
+        published = format_article_date(article.get("published_at"))
+        print(f"     {source} | {published}")
+
+        if not hyperlink_support and url:
+            print(f"     {url}")
+
+        description = str(article.get("description") or "").strip()
+        if description:
+            print(textwrap.fill(
+                description,
+                width=70,
+                initial_indent="     ",
+                subsequent_indent="     ",
+            ))
+        print()
+
+    if displayed_count == 0:
+        print("  No recent company-specific news found.")
+    print(separator)
+    print()
 
 
 def print_error(message: str) -> None:

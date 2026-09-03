@@ -8,3 +8,4 @@
 # or leave it unpinned to always get the latest release.
 
 yfinance
+requests

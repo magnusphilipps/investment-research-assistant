@@ -25,6 +25,7 @@ from . import display
 from . import performance
 from . import expectations
 from . import peers
+from . import news
 
 
 def run() -> None:
@@ -161,3 +162,16 @@ def run() -> None:
         else:
             # display.print_analyst_expectations handles N/A values itself
             display.print_analyst_expectations(expectations_data)
+
+        # Feature 8 — Recent News & Developments.
+        # This is last and failure-isolated so a missing key, timeout, or
+        # Marketaux problem never hides Features 1–7.
+        try:
+            news_result = news.get_company_news(ticker)
+        except Exception:
+            news_result = {
+                "status": "unavailable",
+                "message": "Recent news temporarily unavailable.",
+                "articles": [],
+            }
+        display.print_news(news_result)
