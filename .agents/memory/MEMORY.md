@@ -1,0 +1,1 @@
+- [Python native libraries on Replit](python-native-libraries.md) — NumPy wheels may require indexed Nix `libgcc` and `zlib` entries in addition to the Python base runtime.
