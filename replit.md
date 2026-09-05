@@ -41,7 +41,8 @@ requirements.txt                ← Python dependencies (pip install -r requirem
 
 - Long-term learning project — keep everything simple, modular, and well commented.
 - Python only for now. No JavaScript, no web UI yet.
-- No AI features in the first version.
+- Feature 9 adds grounded Gemini analysis; keep it separate from data fetching,
+  preserve the no-recommendation boundary, and keep provider failures isolated.
 - Every file should be clearly explained for a learner.
 - Grow the project in small, deliberate phases (see README.md roadmap).
 

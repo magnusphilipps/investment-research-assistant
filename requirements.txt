@@ -9,3 +9,4 @@
 
 yfinance
 requests
+google-genai

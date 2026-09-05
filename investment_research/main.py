@@ -26,6 +26,7 @@ from . import performance
 from . import expectations
 from . import peers
 from . import news
+from . import analysis
 
 
 def run() -> None:
@@ -118,6 +119,7 @@ def run() -> None:
         # get_ratios() reuses the already-fetched `fin` dict for the
         # calculated ratios and makes one additional ticker.info call
         # for live market valuation metrics.
+        ratios = {}
         try:
             ratios = financials.get_ratios(ticker, fin)
         except Exception as error:
@@ -129,6 +131,10 @@ def run() -> None:
             display.print_ratios(ratios, fin)
 
         # Feature 7 — Peer Comparison (keeps failures non-fatal)
+        peer_result = {
+            "available": False,
+            "message": "Peer comparison unavailable for this company.",
+        }
         try:
             peer_result = peers.fetch_peer_comparison(ticker)
         except Exception as error:
@@ -143,6 +149,7 @@ def run() -> None:
         # Feature 5 — Stock Price Performance.
         # This is independent from financial statements, so a failed history
         # request should not remove the Features 1-4 output above.
+        price_performance = None
         try:
             price_performance = performance.get_performance(ticker)
         except Exception as error:
@@ -155,6 +162,7 @@ def run() -> None:
 
         # Feature 6 — Analyst Expectations & Forward Outlook
         # Keep failures here non-fatal so earlier features remain visible.
+        expectations_data = {}
         try:
             expectations_data = expectations.get_analyst_expectations(ticker)
         except Exception as error:
@@ -175,3 +183,26 @@ def run() -> None:
                 "articles": [],
             }
         display.print_news(news_result)
+
+        # Feature 9 — Grounded AI Analysis.
+        # The context is assembled from results already collected above; the
+        # AI layer does not refetch yfinance or Marketaux data.
+        analysis_context = analysis.build_analysis_context(
+            ticker=ticker,
+            stock_info=data,
+            financials=fin,
+            ratios=ratios,
+            performance=price_performance,
+            expectations=expectations_data,
+            peers=peer_result,
+            news=news_result,
+        )
+        try:
+            ai_result = analysis.get_ai_analysis(analysis_context)
+        except Exception:
+            ai_result = {
+                "status": "unavailable",
+                "message": "AI analysis temporarily unavailable.",
+                "analysis": None,
+            }
+        display.print_ai_analysis(ai_result)

@@ -405,6 +405,14 @@ class NewsTests(unittest.TestCase):
              patch("investment_research.main.display.print_performance"), \
              patch("investment_research.main.display.print_analyst_expectations"), \
              patch("investment_research.main.display.print_news") as print_news, \
+             patch(
+                 "investment_research.main.analysis.get_ai_analysis",
+                 return_value={
+                     "status": "unavailable",
+                     "message": "AI analysis temporarily unavailable.",
+                     "analysis": None,
+                 },
+             ), \
              patch("investment_research.main.fetcher.get_stock_info", return_value={"ticker": "AAPL"}), \
              patch("investment_research.main.financials.get_financial_statements", return_value={}), \
              patch("investment_research.main.financials.get_ratios", return_value={}), \

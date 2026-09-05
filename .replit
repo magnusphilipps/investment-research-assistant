@@ -21,4 +21,4 @@ timeoutMs = 20000
 
 [nix]
 channel = "stable-25_05"
-packages = ["python313Packages.pytest", "libgcc", "zlib"]
+packages = ["libgcc", "python313Packages.google-genai", "python313Packages.pytest", "zlib"]

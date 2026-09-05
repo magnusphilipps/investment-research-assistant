@@ -1375,6 +1375,60 @@ def print_news(result: dict) -> None:
     print()
 
 
+def print_ai_analysis(result: dict) -> None:
+    """Print the structured Feature 9 analysis without exposing raw JSON."""
+    separator = "-" * 64
+
+    print()
+    print("  AI ANALYSIS")
+    print(separator)
+
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        print("  AI analysis temporarily unavailable.")
+        print(separator)
+        print()
+        return
+
+    analysis = result.get("analysis")
+    if not isinstance(analysis, dict):
+        print("  AI analysis temporarily unavailable.")
+        print(separator)
+        print()
+        return
+
+    sections = (
+        ("Financial Performance", "financial_performance"),
+        ("Financial Position", "financial_position"),
+        ("Valuation", "valuation"),
+        ("Share Price & Expectations", "share_price_and_expectations"),
+        ("Peer Positioning", "peer_positioning"),
+        ("Recent Developments", "recent_developments"),
+    )
+
+    for label, key in sections:
+        text = analysis.get(key)
+        if not isinstance(text, str) or not text.strip():
+            continue
+        print(f"  {label}")
+        print(textwrap.fill(
+            text.strip(),
+            width=70,
+            initial_indent="  ",
+            subsequent_indent="  ",
+        ))
+        print()
+
+    factors = analysis.get("key_factors_to_watch")
+    if isinstance(factors, list) and factors:
+        print("  Key Factors to Watch")
+        for factor in factors:
+            if isinstance(factor, str) and factor.strip():
+                print(f"  • {factor.strip()}")
+
+    print(separator)
+    print()
+
+
 def print_error(message: str) -> None:
     """
     Print a clearly labelled error message to the terminal.

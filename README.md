@@ -9,7 +9,7 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
-## Current Features (v8)
+## Current Features (v9)
 
 - **Analyst Expectations & Forward Outlook (Feature 6)**: Displays analyst price targets, recommendation counts, and (where available) forward revenue estimates. Shows current price, average/median/high/low analyst targets, number of analysts, and the implied upside/downside using (Target / Current) - 1. Recommendation counts are presented by category (Strong Buy / Buy / Hold / Sell / Strong Sell). Missing data is shown as `N/A`. This feature is purely factual: it surfaces analyst estimates and does not provide investment recommendations.
 
@@ -30,6 +30,7 @@ capability while keeping the code simple, modular, and well commented.
 - **52-week range:** current adjusted price, high, low, and distance from each boundary
 - **S&P 500 comparison:** 1-year, 3-year, and 5-year stock returns versus `^GSPC` in percentage points
 - **Recent News & Developments (Feature 8):** up to three recent English-language, company-specific Marketaux articles with source, date, concise description, and original URL
+- **Grounded AI Analysis (Feature 9):** structured Gemini synthesis of the evidence already collected by Features 1–8, with no new financial-data requests, recommendations, or target prices
 - Values displayed in the company's reporting currency (USD, GBP, EUR, etc.)
 - Large figures formatted compactly: `$391.0B`, `£8.7M`, `-$3.7B`
 - Missing fields shown as `N/A` rather than crashing
@@ -69,6 +70,8 @@ investment_research_assistant/
 │   ├── fetcher.py                  # Fetches price snapshot + overview via yfinance
 │   ├── financials.py               # Fetches, extracts, and calculates financial statements
 │   ├── news.py                     # Fetches and standardises Marketaux news
+│   ├── analysis.py                 # Builds compact Feature 9 evidence context
+│   ├── gemini_provider.py          # Isolated Google Gemini provider integration
 │   ├── performance.py               # Fetches adjusted prices and calculates performance metrics
 │   └── display.py                  # Formats and prints all output to the terminal
 │
@@ -87,6 +90,8 @@ investment_research_assistant/
 | `investment_research/fetcher.py` | Fetches price, market cap, and company overview from `ticker.info`. |
 | `investment_research/financials.py` | Fetches annual statements (DataFrames), extracts line items with fallback label lists, calculates margins/ratios/FCF. |
 | `investment_research/news.py` | Reads `MARKETAUX_API_KEY`, requests recent Marketaux news, standardises article metadata, and handles API failures. |
+| `investment_research/analysis.py` | Converts Feature 1–8 result dictionaries into a compact, JSON-safe AI evidence context. |
+| `investment_research/gemini_provider.py` | Calls Gemini with grounded instructions, validates structured JSON, and hides provider failures. |
 | `investment_research/performance.py` | Fetches adjusted historical prices, calculates returns and the 52-week range, and compares the stock with the S&P 500. |
 | `investment_research/display.py` | All formatting and printing, including Feature 8 article links and URL fallbacks. |
 | `investment_research/__init__.py` | Empty marker file. Required by Python to treat the folder as an importable package. |
@@ -386,12 +391,21 @@ one new concept without requiring changes to existing code.
 - Source, UTC-formatted publication date, concise description, and original URL
 - Clickable headlines in terminals supporting OSC-8 links, with URL fallback
 - Graceful handling for missing keys, API errors, empty responses, malformed data, and duplicates
-- No AI analysis, sentiment judgement, or investment recommendation
 
-### Phase 9 — Export (planned)
+### Phase 9 — Grounded AI Analysis ✅
+- Builds a compact evidence package from the structured results already collected by Features 1–8
+- Uses Google Gemini model `gemini-3.6-flash` through the official `google-genai` SDK
+- Returns structured JSON sections for financial performance, financial position, valuation, share price and expectations, peer positioning, recent developments, and key factors to watch
+- Uses `GOOGLE_API_KEY` from Replit Secrets; the key is never printed, stored in source, or included in errors
+- Explicitly grounds factual claims in supplied evidence and represents missing information as unavailable rather than zero
+- Keeps provider-specific Gemini code isolated in `gemini_provider.py`
+- Does not make Buy/Hold/Sell recommendations, personalized financial advice, sentiment scores, or unsupported price targets
+- Gemini/API failures are isolated and display `AI analysis temporarily unavailable.` while Features 1–8 continue normally
+
+### Phase 10 — Export (planned)
 - Save results to a CSV file for use in spreadsheets
 
-### Phase 10 — Web Interface (planned)
+### Phase 11 — Web Interface (planned)
 - Simple web UI using Flask or FastAPI
 - Display the same data in a browser
 
@@ -579,13 +593,92 @@ fallback output without using the daily Marketaux allowance.
 
 ---
 
+## Feature 9 — Grounded AI Analysis
+
+### What it does
+
+Feature 9 adds an interpretation layer after the normal Features 1–8 report.
+It does not become another financial-data source. Instead, it sends a compact
+structured evidence package to Gemini and asks for neutral, selective
+interpretation of the relationships in that evidence.
+
+```text
+Features 1–8 collect and calculate evidence
+              ↓
+analysis.py builds a compact context
+              ↓
+gemini_provider.py sends the context to Gemini
+              ↓
+validated structured analysis
+              ↓
+display.py prints the AI ANALYSIS section
+```
+
+### Grounding and safety rules
+
+- Gemini receives only the evidence assembled from the existing application
+  results; it does not call yfinance or Marketaux itself.
+- The instruction prompt says not to invent company facts, financial figures,
+  news, analyst forecasts, or peer metrics.
+- Missing values remain `None` or unavailable; they are never changed to zero
+  or the string `N/A` before being sent to Gemini.
+- The output is required to use JSON structured output with six narrative
+  sections and a list of key factors to watch.
+- The result is validated before it reaches `display.py`; malformed or empty
+  output is treated as unavailable.
+- The feature deliberately avoids Buy/Hold/Sell recommendations, personalized
+  advice, sentiment scoring, and unsupported price targets.
+
+### Main files and responsibilities
+
+- `investment_research/analysis.py` converts the existing Feature 1–8
+  dictionaries into a compact JSON-safe context. The Feature 7 pandas
+  DataFrame is flattened into nested dictionaries, and retrieval metadata is
+  excluded.
+- `investment_research/gemini_provider.py` is the only module that imports the
+  Google Gemini SDK. It reads `GOOGLE_API_KEY`, uses `gemini-3.6-flash`, sends
+  the grounding instructions, requests `application/json`, and validates the
+  response.
+- `investment_research/main.py` assembles the context from values it has
+  already fetched and calls Feature 9 last. Provider failures cannot hide the
+  earlier report.
+- `investment_research/display.py` formats the structured sections and key
+  factors; it never prints raw JSON or provider errors.
+
+### Beginner concepts
+
+- **LLM API:** a network service that accepts instructions and text and returns
+  generated language.
+- **Gemini API:** Google's model service used here for synthesis, not for
+  retrieving the company's financial data.
+- **Grounding:** limiting factual claims to the evidence included in the
+  request.
+- **Analysis context:** the small normalized dictionary passed to the model.
+  Compact context reduces noise and makes the model's evidence boundary clear.
+- **Tokens:** roughly the chunks of text a language model processes; shorter,
+  focused context is easier for the model to handle.
+- **Structured output:** JSON with known fields instead of an unpredictable
+  essay, which lets the application validate the response before display.
+- **Provider isolation:** if Claude or OpenAI is added later, the provider
+  integration can be replaced or extended without rewriting data collection,
+  context construction, or terminal formatting.
+
+### Testing
+
+`tests/test_analysis.py` uses mocked provider responses only. It covers context
+construction, missing values, missing API keys, successful structured output,
+provider failures, malformed/empty responses, display success, and display
+fallback behavior. No live Gemini request is made by the automated tests.
+
+---
+
 ### How the long yfinance company description was shortened
 - The original description remains available in the data returned by the fetcher.
 - Display uses a deterministic function `shorten_description()` in `display.py` that:
   1. Cleans whitespace.
   2. Splits sentences using a simple regex.
   3. Keeps the first 3–4 sentences up to a character limit and wraps them for the terminal.
-- No external AI or LLM is used — the method is deterministic and explainable.
+ - No AI is used for description shortening — the method is deterministic and explainable.
 
 ---
 
