@@ -10,3 +10,4 @@
 yfinance
 requests
 google-genai
+python-dotenv

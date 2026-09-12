@@ -21,8 +21,12 @@
 #   only starts when you run this file directly — not when it's
 #   imported as part of something else.
 # ============================================================
+from dotenv import load_dotenv
 
+load_dotenv()
 from investment_research.main import run
 
 if __name__ == "__main__":
     run()
+
+
