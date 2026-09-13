@@ -1429,6 +1429,71 @@ def print_ai_analysis(result: dict) -> None:
     print()
 
 
+def print_market_review(result: dict, company_name: str = "the Company") -> None:
+    """Print the validated Feature 10 review without exposing retrieval metadata."""
+    separator = "-" * 64
+    print()
+    print("  MARKET & INDUSTRY REVIEW")
+    print(separator)
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        print("  Market & industry review temporarily unavailable.")
+        print(separator)
+        print()
+        return
+
+    review = result.get("review")
+    if not isinstance(review, dict):
+        print("  Market & industry review temporarily unavailable.")
+        print(separator)
+        print()
+        return
+
+    for label, key in (("Industry Overview", "industry_overview"), ("Market Outlook", "market_outlook")):
+        text = review.get(key)
+        if isinstance(text, str) and text.strip():
+            print(f"  {label}")
+            print(textwrap.fill(
+                _hide_market_citations(text),
+                width=70,
+                initial_indent="  ",
+                subsequent_indent="  ",
+            ))
+            print()
+
+    for label, key in (
+        ("Growth Drivers", "growth_drivers"),
+        ("Competitive Dynamics", "competitive_dynamics"),
+        ("Industry Risks", "industry_risks"),
+        (f"Implications for {company_name}", "company_implications"),
+    ):
+        items = review.get(key)
+        if not isinstance(items, list):
+            continue
+        print(f"  {label}")
+        for item in items:
+            if isinstance(item, str) and item.strip():
+                clean_item = _hide_market_citations(item)
+                print(textwrap.fill(
+                    clean_item,
+                    width=80,
+                    initial_indent="  • ",
+                    subsequent_indent="    ",
+                    break_long_words=False,
+                    break_on_hyphens=False,
+                ))
+        print()
+
+    print(separator)
+    print()
+
+
+def _hide_market_citations(text: str) -> str:
+    """Remove internal evidence markers and URLs from user-facing review text."""
+    without_urls = re.sub(r"https?://\S+", "", text)
+    without_markers = re.sub(r"\(?\bS\d+(?:\s*,\s*S\d+)*\)?", "", without_urls)
+    return re.sub(r"\s{2,}", " ", without_markers).strip()
+
+
 def print_error(message: str) -> None:
     """
     Print a clearly labelled error message to the terminal.

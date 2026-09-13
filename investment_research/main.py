@@ -27,6 +27,7 @@ from . import expectations
 from . import peers
 from . import news
 from . import analysis
+from . import market_research
 
 
 def run() -> None:
@@ -206,3 +207,17 @@ def run() -> None:
                 "analysis": None,
             }
         display.print_ai_analysis(ai_result)
+
+        # Feature 10 — Current, externally retrieved market and industry context.
+        # Retrieval and synthesis are isolated so provider failures cannot hide
+        # the completed Features 1–9 report.
+        try:
+            market_result = market_research.get_market_review(data)
+        except Exception:
+            market_result = {
+                "status": "unavailable",
+                "message": "Market & industry review temporarily unavailable.",
+                "review": None,
+                "sources": [],
+            }
+        display.print_market_review(market_result, data.get("name") or ticker)

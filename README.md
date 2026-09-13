@@ -71,6 +71,8 @@ investment_research_assistant/
 │   ├── financials.py               # Fetches, extracts, and calculates financial statements
 │   ├── news.py                     # Fetches and standardises Marketaux news
 │   ├── analysis.py                 # Builds compact Feature 9 evidence context
+│   ├── market_research.py          # Builds and validates Feature 10 market evidence
+│   ├── tavily_provider.py          # Isolated Tavily search integration
 │   ├── gemini_provider.py          # Isolated Google Gemini provider integration
 │   ├── performance.py               # Fetches adjusted prices and calculates performance metrics
 │   └── display.py                  # Formats and prints all output to the terminal
@@ -92,11 +94,37 @@ investment_research_assistant/
 | `investment_research/news.py` | Reads `MARKETAUX_API_KEY`, requests recent Marketaux news, standardises article metadata, and handles API failures. |
 | `investment_research/analysis.py` | Converts Feature 1–8 result dictionaries into a compact, JSON-safe AI evidence context. |
 | `investment_research/gemini_provider.py` | Calls Gemini with grounded instructions, validates structured JSON, and hides provider failures. |
+| `investment_research/tavily_provider.py` | Sends a small number of current market searches to Tavily without exposing the API key. |
+| `investment_research/market_research.py` | Builds deterministic queries, cleans and deduplicates evidence, and validates Feature 10 results. |
 | `investment_research/performance.py` | Fetches adjusted historical prices, calculates returns and the 52-week range, and compares the stock with the S&P 500. |
 | `investment_research/display.py` | All formatting and printing, including Feature 8 article links and URL fallbacks. |
 | `investment_research/__init__.py` | Empty marker file. Required by Python to treat the folder as an importable package. |
 
 ---
+
+## Feature 10 — Market & Industry Review
+
+Feature 10 adds current external context without turning Gemini into an
+unbounded web-search agent. Python builds five deterministic queries from the
+company's sector, industry, and name, then Tavily retrieves the evidence.
+`market_research.py` removes incomplete results, normalizes text, deduplicates
+URLs and titles, limits content, and assigns source IDs (`S1`, `S2`, ...).
+Gemini receives only that compact evidence package plus minimal company
+metadata, and its JSON response is validated before display.
+
+The pipeline is:
+
+```text
+query → search → retrieve → clean → structure → reason → validate → display
+```
+
+Source IDs and original URLs remain internal for grounding validation but are
+not displayed to the user. Gemini can only cite IDs that exist in the retrieved
+package, so it cannot invent URLs. Missing `TAVILY_API_KEY`, network failures,
+empty evidence, and Gemini failures produce a safe unavailable section while
+Features 1–9 remain visible. Five searches per company run keeps free-tier
+usage predictable.
+Set `TAVILY_API_KEY` in `.env`; never place the key in source code.
 
 ## Financial Statement Formulas
 
@@ -701,4 +729,3 @@ PEERS = {
 ---
 
 (End of Learning Guide)
-
