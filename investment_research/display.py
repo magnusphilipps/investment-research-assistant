@@ -1487,6 +1487,42 @@ def print_market_review(result: dict, company_name: str = "the Company") -> None
     print()
 
 
+def print_bull_bear_analysis(result: dict) -> None:
+    """Print the compact Feature 11 scenario analysis."""
+    separator = "-" * 64
+    print()
+    print("  BULL / BEAR SCENARIO ANALYSIS")
+    print(separator)
+    if not isinstance(result, dict) or result.get("status") != "ok":
+        print("  Bull / Bear analysis temporarily unavailable.")
+        print(separator)
+        print()
+        return
+    analysis = result.get("analysis")
+    if not isinstance(analysis, dict):
+        print("  Bull / Bear analysis temporarily unavailable.")
+        print(separator)
+        print()
+        return
+    for label, key in (
+        ("BULL CASE", "bull_case"),
+        ("BEAR CASE", "bear_case"),
+        ("KEY SWING FACTORS", "swing_factors"),
+    ):
+        print(f"  {label}")
+        for item in analysis.get(key, []):
+            if isinstance(item, str) and item.strip():
+                print(textwrap.fill(
+                    f"• {item.strip()}",
+                    width=78,
+                    initial_indent="  ",
+                    subsequent_indent="    ",
+                ))
+        print()
+    print(separator)
+    print()
+
+
 def _hide_market_citations(text: str) -> str:
     """Remove internal evidence markers and URLs from user-facing review text."""
     without_urls = re.sub(r"https?://\S+", "", text)

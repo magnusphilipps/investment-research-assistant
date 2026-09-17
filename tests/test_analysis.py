@@ -126,7 +126,10 @@ class GeminiProviderTests(unittest.TestCase):
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
             "investment_research.gemini_provider._request_model",
             return_value=_valid_model_response(),
-        ) as request:
+        ) as request, patch(
+            "investment_research.gemini_provider.cache.read",
+            return_value=None,
+        ):
             result = generate_analysis({"company": {"ticker": "AAPL"}})
 
         self.assertEqual(result["status"], "ok")
@@ -142,6 +145,9 @@ class GeminiProviderTests(unittest.TestCase):
                 "investment_research.gemini_provider._request_model",
                 side_effect=response if isinstance(response, Exception) else None,
                 return_value=None if isinstance(response, Exception) else response,
+            ), patch(
+                "investment_research.gemini_provider.cache.read",
+                return_value=None,
             ):
                 result = generate_analysis({})
             self.assertEqual(result["status"], "unavailable")
@@ -152,6 +158,9 @@ class GeminiProviderTests(unittest.TestCase):
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
             "investment_research.gemini_provider._request_model",
             return_value=invalid,
+        ), patch(
+            "investment_research.gemini_provider.cache.read",
+            return_value=None,
         ):
             result = generate_analysis({})
 

@@ -31,6 +31,7 @@ capability while keeping the code simple, modular, and well commented.
 - **S&P 500 comparison:** 1-year, 3-year, and 5-year stock returns versus `^GSPC` in percentage points
 - **Recent News & Developments (Feature 8):** up to three recent English-language, company-specific Marketaux articles with source, date, concise description, and original URL
 - **Grounded AI Analysis (Feature 9):** structured Gemini synthesis of the evidence already collected by Features 1–8, with no new financial-data requests, recommendations, or target prices
+- **Bull / Bear Scenario Analysis (Feature 11):** exactly three conditional bull-case arguments, three bear-case arguments, and three key swing factors grounded in the structured company evidence and Feature 10 external review
 - Values displayed in the company's reporting currency (USD, GBP, EUR, etc.)
 - Large figures formatted compactly: `$391.0B`, `£8.7M`, `-$3.7B`
 - Missing fields shown as `N/A` rather than crashing
@@ -125,6 +126,28 @@ empty evidence, and Gemini failures produce a safe unavailable section while
 Features 1–9 remain visible. Five searches per company run keeps free-tier
 usage predictable.
 Set `TAVILY_API_KEY` in `.env`; never place the key in source code.
+
+## Feature 11 — Bull / Bear Scenario Analysis
+
+Feature 11 asks what would have to go right or wrong for the investment case
+to strengthen or weaken. It returns only the three strongest Bull Case
+arguments, three strongest Bear Case arguments, and three variables to watch.
+Bull and Bear items are validated as one-sentence, 10–16-word mechanisms;
+Swing Factors are validated as 4–10-word variables without conclusions.
+These are conditional scenarios, not predictions or recommendations.
+
+Feature 11 uses the structured evidence collected by Features 1–8 and the
+validated external evidence from Feature 10. It does not mainly reinterpret
+Feature 9's prose, and it does not run another web-search pipeline. This keeps
+the reasoning tied to observable inputs while allowing external industry
+evidence to inform company-specific mechanisms.
+
+Successful Gemini responses for Features 9 and 10 are cached locally in
+`.cache/` for approximately 24 hours. The cache key includes the complete
+input context, so changed evidence produces a new key. Failed or invalid
+responses are never cached. Temporary Gemini 503 errors are retried with
+short exponential backoff; 429 quota or rate-limit errors fail immediately,
+so repeated testing does not create more quota pressure.
 
 ## Financial Statement Formulas
 

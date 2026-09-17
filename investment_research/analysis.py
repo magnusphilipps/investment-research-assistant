@@ -193,3 +193,20 @@ def build_analysis_context(
 def get_ai_analysis(context: dict[str, Any]) -> dict[str, Any]:
     """Request analysis through the currently selected provider."""
     return gemini_provider.generate_analysis(context)
+
+
+def build_bull_bear_context(
+    analysis_context: dict[str, Any],
+    market_review: dict[str, Any] | None,
+) -> dict[str, Any]:
+    """Combine structured company evidence with validated external evidence."""
+    context = dict(analysis_context)
+    context["external_market_evidence"] = _json_safe({
+        "review": (market_review or {}).get("review") if isinstance(market_review, dict) else None,
+        "sources": (market_review or {}).get("sources", []) if isinstance(market_review, dict) else [],
+    })
+    return context
+
+
+def get_bull_bear_analysis(context: dict[str, Any]) -> dict[str, Any]:
+    return gemini_provider.generate_bull_bear(context)

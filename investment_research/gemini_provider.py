@@ -9,7 +9,11 @@ from __future__ import annotations
 
 import json
 import os
+import re
+import time
 from typing import Any
+
+from . import cache
 
 
 MODEL_NAME = "gemini-3.6-flash"
@@ -82,6 +86,16 @@ MARKET_REVIEW_SCHEMA = {
     ],
 }
 
+BULL_BEAR_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "bull_case": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 3},
+        "bear_case": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 3},
+        "swing_factors": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 3},
+    },
+    "required": ["bull_case", "bear_case", "swing_factors"],
+}
+
 _TEXT_FIELDS = (
     "financial_performance",
     "financial_position",
@@ -122,6 +136,32 @@ def _validate_analysis(value: Any) -> dict[str, Any] | None:
     return analysis
 
 
+def _is_503(error: Exception) -> bool:
+    text = str(error).lower()
+    return "503" in text or "service unavailable" in text or "high demand" in text or "unavailable" in text
+
+
+def _is_429(error: Exception) -> bool:
+    text = str(error).lower()
+    return "429" in text or "resource_exhausted" in text or "quota" in text or "rate limit" in text
+
+
+def _request_with_retry(request, feature_label: str) -> str | None:
+    for attempt in range(3):
+        try:
+            return request()
+        except Exception as exc:
+            if _is_429(exc):
+                print(f"{feature_label}: Gemini quota or rate limit reached.")
+            elif _is_503(exc) and attempt < 2:
+                time.sleep(2 ** (attempt + 1))
+                continue
+            else:
+                print(f"{feature_label} ERROR:", repr(exc))
+            return None
+    return None
+
+
 def _request_model(context: dict[str, Any], api_key: str) -> str:
     """Call Gemini using the current official Google Python SDK."""
     from google import genai
@@ -157,24 +197,36 @@ def generate_analysis(context: dict[str, Any]) -> dict[str, Any]:
     if not api_key:
         return _unavailable()
 
+    cached = cache.read("feature-9", context)
+    if isinstance(cached, dict) and cached.get("status") == "ok":
+        cached_analysis = _validate_analysis(cached.get("analysis"))
+        if cached_analysis is not None:
+            return {"status": "ok", "message": None, "analysis": cached_analysis}
+
+    raw_response = _request_with_retry(
+        lambda: _request_model(context, api_key),
+        "FEATURE 9",
+    )
+    if not raw_response or not raw_response.strip():
+        return _unavailable()
     try:
-        raw_response = _request_model(context, api_key)
-        if not raw_response.strip():
-            return _unavailable()
         decoded = json.loads(raw_response)
-        analysis = _validate_analysis(decoded)
-        if analysis is None:
-            return _unavailable()
-    except Exception:
-        # Provider errors, rate limits, malformed JSON, and SDK failures are
-        # deliberately hidden behind the same user-friendly result.
+    except (TypeError, ValueError):
+        return _unavailable()
+    analysis = _validate_analysis(decoded)
+    if analysis is None:
         return _unavailable()
 
-    return {
+    result = {
         "status": "ok",
         "message": None,
         "analysis": analysis,
     }
+    try:
+        cache.write("feature-9", context, result)
+    except (OSError, TypeError, ValueError):
+        pass
+    return result
 
 
 def _validate_market_review(value: Any) -> dict[str, Any] | None:
@@ -260,15 +312,145 @@ def _request_market_model(context: dict[str, Any], api_key: str) -> str:
 def generate_market_review(context: dict[str, Any]) -> dict[str, Any]:
     """Generate a validated grounded market review or a safe unavailable result."""
     api_key = os.environ.get("GOOGLE_API_KEY")
+
     if not api_key:
-        return {"status": "unavailable", "message": MARKET_UNAVAILABLE_MESSAGE, "review": None}
+        return {
+            "status": "unavailable",
+            "message": MARKET_UNAVAILABLE_MESSAGE,
+            "review": None,
+        }
+
+    cached = cache.read("feature-10", context)
+    if isinstance(cached, dict) and cached.get("status") == "ok":
+        cached_review = _validate_market_review(cached.get("review"))
+        if cached_review is not None:
+            return {"status": "ok", "message": None, "review": cached_review}
+
+    raw_response = _request_with_retry(
+        lambda: _request_market_model(context, api_key),
+        "FEATURE 10",
+    )
+    if not raw_response:
+        return {
+            "status": "unavailable",
+            "message": MARKET_UNAVAILABLE_MESSAGE,
+            "review": None,
+        }
+
+    if not raw_response.strip():
+        return {
+            "status": "unavailable",
+            "message": MARKET_UNAVAILABLE_MESSAGE,
+            "review": None,
+        }
+
     try:
-        raw_response = _request_market_model(context, api_key)
-        if not raw_response.strip():
-            return {"status": "unavailable", "message": MARKET_UNAVAILABLE_MESSAGE, "review": None}
-        review = _validate_market_review(json.loads(raw_response))
-    except Exception:
-        return {"status": "unavailable", "message": MARKET_UNAVAILABLE_MESSAGE, "review": None}
+        parsed_response = json.loads(raw_response)
+    except (TypeError, ValueError):
+        return {
+            "status": "unavailable",
+            "message": MARKET_UNAVAILABLE_MESSAGE,
+            "review": None,
+        }
+    review = _validate_market_review(parsed_response)
+
     if review is None:
-        return {"status": "unavailable", "message": MARKET_UNAVAILABLE_MESSAGE, "review": None}
-    return {"status": "ok", "message": None, "review": review}
+        return {
+            "status": "unavailable",
+            "message": MARKET_UNAVAILABLE_MESSAGE,
+            "review": None,
+        }
+
+    result = {
+        "status": "ok",
+        "message": None,
+        "review": review,
+    }
+    try:
+        cache.write("feature-10", context, result)
+    except (OSError, TypeError, ValueError):
+        pass
+    return result
+
+
+def _validate_bull_bear(value: Any) -> dict[str, list[str]] | None:
+    if not isinstance(value, dict):
+        return None
+    result: dict[str, list[str]] = {}
+    for field in ("bull_case", "bear_case"):
+        items = value.get(field)
+        if not isinstance(items, list) or len(items) != 3:
+            return None
+        if any(
+            not isinstance(item, str)
+            or not item.strip()
+            or not 10 <= len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", item)) <= 16
+            or len(re.findall(r"[.!?]", item)) != 1
+            or item.rstrip()[-1] not in ".!?"
+            for item in items
+        ):
+            return None
+        result[field] = [item.strip() for item in items]
+    items = value.get("swing_factors")
+    if not isinstance(items, list) or len(items) != 3:
+        return None
+    if any(
+        not isinstance(item, str)
+        or not item.strip()
+        or not 4 <= len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", item)) <= 10
+        or re.search(r"[.!?]", item)
+        for item in items
+    ):
+        return None
+    result["swing_factors"] = [item.strip() for item in items]
+    return result
+
+
+def _request_bull_bear_model(context: dict[str, Any], api_key: str) -> str:
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=(
+            "Create exactly three conditional bull-case arguments, three conditional "
+            "bear-case arguments, and three concise swing factors from ONLY this evidence. "
+            "Bull and bear items must be exactly one sentence and 10-16 words, using "
+            "one clear evidence -> business mechanism -> potential implication. "
+            "Swing factors must be 4-10 words, phrased only as variables to monitor. "
+            "Do not use analyst forecasts or metrics as the mechanism itself; use the "
+            "underlying demand, pricing, competition, capacity, execution, or financial "
+            "driver, with forecasts only as supporting evidence. Avoid subordinate clauses, "
+            "deterministic claims, excessive numbers, recommendations, and target prices. "
+            "Use cautious wording such as could, may, or increases exposure to. "
+            "Every bull/bear item must end with one sentence-ending punctuation mark; "
+            "swing factors must not be sentences. Do not provide outside facts.\n\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction="Return only the requested grounded JSON structure.",
+            temperature=0.2,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+            response_schema=BULL_BEAR_SCHEMA,
+        ),
+    )
+    return str(getattr(response, "text", "") or "")
+
+
+def generate_bull_bear(context: dict[str, Any]) -> dict[str, Any]:
+    """Generate validated Feature 11 scenario analysis or a safe unavailable result."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
+    raw_response = _request_with_retry(lambda: _request_bull_bear_model(context, api_key), "FEATURE 11")
+    if not raw_response:
+        return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
+    try:
+        analysis = _validate_bull_bear(json.loads(raw_response))
+    except (TypeError, ValueError):
+        analysis = None
+    if analysis is None:
+        return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
+    return {"status": "ok", "message": None, "analysis": analysis}

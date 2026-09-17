@@ -221,3 +221,15 @@ def run() -> None:
                 "sources": [],
             }
         display.print_market_review(market_result, data.get("name") or ticker)
+
+        # Feature 11 — Conditional Bull/Bear scenarios from structured evidence.
+        bull_bear_context = analysis.build_bull_bear_context(analysis_context, market_result)
+        try:
+            bull_bear_result = analysis.get_bull_bear_analysis(bull_bear_context)
+        except Exception:
+            bull_bear_result = {
+                "status": "unavailable",
+                "message": "Bull / Bear analysis temporarily unavailable.",
+                "analysis": None,
+            }
+        display.print_bull_bear_analysis(bull_bear_result)
