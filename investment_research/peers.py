@@ -15,9 +15,18 @@ from __future__ import annotations
 
 import math
 from typing import List, Dict, Any
-import pandas as pd
 
+import pandas as pd
+import yfinance as yf
+
+from . import fetcher, gemini_provider
 from .financials import get_financial_statements, get_ratios
+
+# Feature 7 treats a peer as usable only when at least 4 of the core
+# comparison metrics are available; otherwise the comparison is too thin.
+PEER_DISCOVERY_MIN_METRICS = 4
+PEER_DISCOVERY_TARGET_COUNT = 5
+PEER_DISCOVERY_RETURN_COUNT = 3
 
 
 # Manually configured peer mapping. Edit as needed.
@@ -31,16 +40,149 @@ PEERS: Dict[str, List[str]] = {
 }
 
 
+def _normalise_ticker(value: Any) -> str | None:
+    """Return a cleaned uppercase ticker, or None when it is empty/invalid."""
+    if value is None:
+        return None
+    ticker = str(value).strip().upper()
+    return ticker if ticker else None
+
+
+def _ticker_exists(ticker: str) -> bool:
+    """Check whether a ticker resolves with the existing provider data."""
+    try:
+        info = (yf.Ticker(ticker).info or {})
+    except Exception:
+        return False
+    return bool(info.get("symbol") or info.get("shortName") or info.get("longName"))
+
+
+def _is_valid_metric_value(value: Any, *, metric_name: str | None = None) -> bool:
+    """Match the Feature 7 rules for usable metric values."""
+    if value is None:
+        return False
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return False
+    if not math.isfinite(numeric):
+        return False
+    if metric_name in {"P/E", "Forward P/E", "EV/EBITDA"} and numeric < 0:
+        return False
+    return True
+
+
+def _peer_metric_count(ticker: str) -> int:
+    """Count Feature 7 metrics available for a candidate peer."""
+    try:
+        fin = get_financial_statements(ticker)
+    except Exception:
+        return 0
+    if not fin:
+        return 0
+
+    count = 0
+    income = fin.get("income") or {}
+    revenue_growth = income.get("revenue_growth") or []
+    if revenue_growth and _is_valid_metric_value(revenue_growth[0], metric_name="Revenue Growth"):
+        count += 1
+
+    try:
+        ratios = get_ratios(ticker, fin)
+    except Exception:
+        ratios = {}
+
+    prof = ratios.get("profitability", {})
+    strength = ratios.get("strength", {})
+    val = ratios.get("valuation", {})
+
+    for metric_name, value in {
+        "Operating Margin": prof.get("op_margin") if not _is_financial_company(ticker) else None,
+        "ROE": prof.get("roe"),
+        "Debt/Equity": strength.get("de_ratio"),
+        "P/E": val.get("trailing_pe"),
+        "Forward P/E": val.get("forward_pe"),
+        "EV/EBITDA": val.get("ev_ebitda"),
+    }.items():
+        if _is_valid_metric_value(value, metric_name=metric_name):
+            count += 1
+    return count
+
+
+def _discover_peer_candidates(ticker: str) -> list[str]:
+    """Use Gemini to propose peers and validate them with the existing Feature 7 metrics."""
+    target = _normalise_ticker(ticker)
+    if not target:
+        return []
+
+    try:
+        stock_info = fetcher.get_stock_info(target)
+    except Exception:
+        stock_info = None
+    if not isinstance(stock_info, dict):
+        return []
+
+    context = {
+        "ticker": target,
+        "company_name": stock_info.get("name"),
+        "sector": stock_info.get("sector"),
+        "industry": stock_info.get("industry"),
+        "country": stock_info.get("country"),
+        "description": stock_info.get("description"),
+        "research_focus": {
+            "sector": stock_info.get("sector"),
+            "industry": stock_info.get("industry"),
+            "business_summary": (stock_info.get("description") or "")[:1200],
+        },
+    }
+
+    try:
+        discovery = gemini_provider.generate_peer_candidates(context)
+    except Exception:
+        return []
+    if not isinstance(discovery, dict) or discovery.get("status") != "ok":
+        return []
+
+    candidates = discovery.get("peers", [])
+    if not isinstance(candidates, list):
+        return []
+
+    ranked: list[tuple[int, int, str]] = []
+    seen: set[str] = set()
+    for index, item in enumerate(candidates):
+        if not isinstance(item, dict):
+            continue
+        candidate_ticker = _normalise_ticker(item.get("ticker"))
+        if not candidate_ticker or candidate_ticker == target:
+            continue
+        if candidate_ticker in seen:
+            continue
+        if not _ticker_exists(candidate_ticker):
+            continue
+        metric_count = _peer_metric_count(candidate_ticker)
+        if metric_count < PEER_DISCOVERY_MIN_METRICS:
+            continue
+        seen.add(candidate_ticker)
+        ranked.append((metric_count, index, candidate_ticker))
+
+    ranked.sort(key=lambda item: (-item[0], item[1]))
+    return [ticker for _, _, ticker in ranked[:PEER_DISCOVERY_RETURN_COUNT]]
+
+
 def get_peers(ticker: str) -> List[str] | None:
-    """Return the configured peer list for a ticker, or None if missing.
+    """Return the best dynamic peer set, or the configured manual map as fallback."""
+    target = _normalise_ticker(ticker)
+    if not target:
+        return None
 
-    Parameters:
-        ticker: Uppercase ticker symbol (e.g. "NVDA")
+    dynamic_peers = _discover_peer_candidates(target)
+    if dynamic_peers:
+        return dynamic_peers
 
-    Returns:
-        List of peer tickers, or None when the mapping is absent.
-    """
-    return PEERS.get(ticker)
+    configured = PEERS.get(target)
+    if configured:
+        return list(configured)
+    return None
 
 
 def _safe_first(lst: list | None) -> float | None:

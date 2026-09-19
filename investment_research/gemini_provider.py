@@ -86,6 +86,27 @@ MARKET_REVIEW_SCHEMA = {
     ],
 }
 
+PEER_DISCOVERY_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "peers": {
+            "type": "ARRAY",
+            "items": {
+                "type": "OBJECT",
+                "properties": {
+                    "ticker": {"type": "STRING"},
+                    "company_name": {"type": "STRING"},
+                    "reason": {"type": "STRING"},
+                },
+                "required": ["ticker", "company_name", "reason"],
+            },
+            "minItems": 1,
+            "maxItems": 5,
+        },
+    },
+    "required": ["peers"],
+}
+
 BULL_BEAR_SCHEMA = {
     "type": "OBJECT",
     "properties": {
@@ -256,6 +277,33 @@ def _validate_market_review(value: Any) -> dict[str, Any] | None:
     return result
 
 
+def _validate_peer_candidates(value: Any) -> list[dict[str, str]] | None:
+    if not isinstance(value, dict):
+        return None
+    candidates = value.get("peers")
+    if not isinstance(candidates, list) or not candidates:
+        return None
+    result: list[dict[str, str]] = []
+    for item in candidates:
+        if not isinstance(item, dict):
+            return None
+        ticker = item.get("ticker")
+        company_name = item.get("company_name")
+        reason = item.get("reason")
+        if not isinstance(ticker, str) or not ticker.strip():
+            return None
+        if not isinstance(company_name, str) or not company_name.strip():
+            return None
+        if not isinstance(reason, str) or not reason.strip():
+            return None
+        result.append({
+            "ticker": ticker.strip().upper(),
+            "company_name": company_name.strip(),
+            "reason": reason.strip(),
+        })
+    return result[:5]
+
+
 def _request_market_model(context: dict[str, Any], api_key: str) -> str:
     """Call Gemini with only the compact external evidence package."""
     from google import genai
@@ -307,6 +355,70 @@ def _request_market_model(context: dict[str, Any], api_key: str) -> str:
         ),
     )
     return str(getattr(response, "text", "") or "")
+
+
+def _request_peer_model(context: dict[str, Any], api_key: str) -> str:
+    """Ask Gemini for candidate peers using only supplied company metadata."""
+    from google import genai
+    from google.genai import types
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=(
+            "Propose 5 public-company peer candidates for the target company using only the supplied metadata. "
+            "Do not calculate financial metrics, do not decide the final peer set, and do not invent data. "
+            "Return only a JSON object with a 'peers' array of candidate objects containing ticker, company_name, and reason.\n\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                "You are a disciplined equity-research analyst. Use only the supplied company metadata. "
+                "Prefer economically similar public companies, not just broad sector matches. Prioritize core business model, products, end markets, customer base, revenue drivers, competitive set, geography, and scale where relevant. Avoid private companies, subsidiaries, ETFs, shell companies, invalid tickers, suppliers/customers unless they are genuine competitors, conglomerates with unrelated economics, and companies with clearly different business models. Return only the requested JSON structure."
+            ),
+            temperature=0.2,
+            max_output_tokens=8192,
+            response_mime_type="application/json",
+            response_schema=PEER_DISCOVERY_SCHEMA,
+        ),
+    )
+    return str(getattr(response, "text", "") or "")
+
+
+def generate_peer_candidates(context: dict[str, Any]) -> dict[str, Any]:
+    """Generate or return a safe unavailable result for peer discovery."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return {"status": "unavailable", "message": "Peer discovery temporarily unavailable.", "peers": []}
+
+    cached = cache.read("feature-7-peers", context)
+    if isinstance(cached, dict) and cached.get("status") == "ok":
+        cached_peers = _validate_peer_candidates(cached)
+        if cached_peers is not None:
+            return {"status": "ok", "message": None, "peers": cached_peers}
+
+    raw_response = _request_with_retry(
+        lambda: _request_peer_model(context, api_key),
+        "FEATURE 7",
+    )
+    if not raw_response or not raw_response.strip():
+        return {"status": "unavailable", "message": "Peer discovery temporarily unavailable.", "peers": []}
+
+    try:
+        parsed_response = json.loads(raw_response)
+    except (TypeError, ValueError):
+        return {"status": "unavailable", "message": "Peer discovery temporarily unavailable.", "peers": []}
+
+    peers = _validate_peer_candidates(parsed_response)
+    if peers is None:
+        return {"status": "unavailable", "message": "Peer discovery temporarily unavailable.", "peers": []}
+
+    result = {"status": "ok", "message": None, "peers": peers}
+    try:
+        cache.write("feature-7-peers", context, result)
+    except (OSError, TypeError, ValueError):
+        pass
+    return result
 
 
 def generate_market_review(context: dict[str, Any]) -> dict[str, Any]:
