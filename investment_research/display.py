@@ -1375,6 +1375,43 @@ def print_news(result: dict) -> None:
     print()
 
 
+def print_stock_assessment(result: dict) -> None:
+    """Print the compact Feature 12A indicator summary without raw internals."""
+    separator = "-" * 64
+
+    print()
+    print("  STOCK ASSESSMENT")
+    print(separator)
+
+    if not isinstance(result, dict):
+        print("  Assessment temporarily unavailable.")
+        print(separator)
+        print()
+        return
+
+    indicators = result.get("indicators") if isinstance(result.get("indicators"), dict) else {}
+    ordered_keys = [
+        ("valuation", "Valuation"),
+        ("financial_quality", "Financial Quality"),
+        ("growth", "Growth"),
+        ("volatility", "Volatility"),
+        ("expectations", "Expectations"),
+    ]
+
+    for key, label in ordered_keys:
+        indicator = indicators.get(key, {}) if isinstance(indicators, dict) else {}
+        if not isinstance(indicator, dict):
+            indicator = {}
+        name = str(indicator.get("label") or "N/A")
+        print(f"  {label:<20}{name:>12}")
+        drivers = indicator.get("drivers") if isinstance(indicator.get("drivers"), list) else []
+        if drivers:
+            print(f"    {drivers[0]}")
+
+    print(separator)
+    print()
+
+
 def print_ai_analysis(result: dict) -> None:
     """Print the structured Feature 9 analysis without exposing raw JSON."""
     separator = "-" * 64

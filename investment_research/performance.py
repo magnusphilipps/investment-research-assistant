@@ -5,6 +5,7 @@ structured values used by the terminal display.  It does not print anything,
 which keeps network access and calculations separate from presentation.
 """
 
+import math
 from datetime import datetime
 
 import pandas as pd
@@ -104,6 +105,59 @@ def _calculate_52_week_range(history: pd.DataFrame) -> dict:
     }
 
 
+def _daily_return_series(prices: pd.Series) -> pd.Series:
+    """Return a clean series of daily returns for volatility calculations."""
+    if prices.empty:
+        return pd.Series(dtype="float64")
+    returns = prices.pct_change().dropna()
+    if returns.empty:
+        return returns
+    returns = returns[returns.map(lambda value: math.isfinite(float(value)))]
+    return returns.astype(float)
+
+
+def _annualized_volatility(daily_returns: pd.Series) -> float | None:
+    """Convert a daily-return series into annualized volatility."""
+    if daily_returns.empty or len(daily_returns) < 2:
+        return None
+    std_dev = daily_returns.std(ddof=1)
+    if pd.isna(std_dev) or std_dev <= 0:
+        return None
+    return float(std_dev * math.sqrt(252))
+
+
+def _beta_for_prices(stock_prices: pd.Series, benchmark_prices: pd.Series) -> float | None:
+    """Estimate beta using the stock and benchmark daily return covariance."""
+    if stock_prices.empty or benchmark_prices.empty:
+        return None
+    aligned = pd.concat({"stock": stock_prices, "benchmark": benchmark_prices}, axis=1, sort=False).dropna()
+    if aligned.empty:
+        return None
+    stock_returns = aligned["stock"].pct_change().dropna()
+    benchmark_returns = aligned["benchmark"].pct_change().dropna()
+    if stock_returns.empty or benchmark_returns.empty:
+        return None
+    combined = pd.concat({"stock": stock_returns, "benchmark": benchmark_returns}, axis=1, sort=False).dropna()
+    if combined.empty or len(combined) < 2:
+        return None
+    benchmark_variance = combined["benchmark"].var(ddof=1)
+    if pd.isna(benchmark_variance) or benchmark_variance == 0:
+        return None
+    beta = combined["stock"].cov(combined["benchmark"]) / benchmark_variance
+    return float(beta) if pd.notna(beta) else None
+
+
+def _max_drawdown(prices: pd.Series) -> float | None:
+    """Return the worst peak-to-trough drawdown over the observation window."""
+    if prices.empty:
+        return None
+    drawdowns = prices / prices.cummax() - 1
+    if drawdowns.empty:
+        return None
+    max_drawdown = float(drawdowns.min())
+    return max_drawdown if pd.notna(max_drawdown) else None
+
+
 def _history_for_ticker(ticker_symbol: str) -> pd.DataFrame:
     """Download prices and apply Yahoo's earliest known trade date, if given."""
     ticker = yf.Ticker(ticker_symbol)
@@ -141,6 +195,7 @@ def get_performance(ticker_symbol: str) -> dict | None:
     if stock_history.empty:
         return None
     stock_prices = stock_history["Adj Close"]
+    stock_daily_returns = _daily_return_series(stock_prices)
 
     stock_returns = {
         label: calculate_return(stock_prices, offset)
@@ -154,6 +209,7 @@ def get_performance(ticker_symbol: str) -> dict | None:
     benchmark_prices = (
         benchmark_history["Adj Close"] if not benchmark_history.empty else pd.Series(dtype="float64")
     )
+    benchmark_daily_returns = _daily_return_series(benchmark_prices)
 
     benchmark_returns = {
         label: calculate_return(benchmark_prices, PERFORMANCE_PERIODS[label])
@@ -182,6 +238,10 @@ def get_performance(ticker_symbol: str) -> dict | None:
 
     return {
         "returns": stock_returns,
+        "daily_returns": stock_daily_returns.tolist(),
+        "annualized_volatility": _annualized_volatility(stock_daily_returns),
+        "beta": _beta_for_prices(stock_prices, benchmark_prices),
+        "max_drawdown": _max_drawdown(stock_prices),
         "range": _calculate_52_week_range(stock_history),
         "benchmark": comparison,
         "latest_date": stock_history.index[-1].date().isoformat(),

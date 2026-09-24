@@ -27,6 +27,7 @@ from . import expectations
 from . import peers
 from . import news
 from . import analysis
+from . import assessment
 from . import market_research
 
 
@@ -172,6 +173,26 @@ def run() -> None:
             # display.print_analyst_expectations handles N/A values itself
             display.print_analyst_expectations(expectations_data)
 
+        # Feature 12A — deterministic stock assessment from the structured
+        # evidence already collected in Features 1–11. This never performs
+        # new research or calls Gemini; it only scores the data the app
+        # already has in memory.
+        assessment_context = {
+            "ticker": ticker,
+            "company": data,
+            "financials": fin,
+            "ratios": ratios,
+            "performance": price_performance,
+            "analyst_expectations": expectations_data,
+            "peer_comparison": peer_result,
+            "valuation": ratios.get("valuation", {}) if isinstance(ratios, dict) else {},
+        }
+        try:
+             assessment_result = assessment.build_stock_assessment(assessment_context)
+        except Exception:
+             assessment_result = {"status": "ok", "indicators": {}}
+
+        display.print_stock_assessment(assessment_result)
         # Feature 8 — Recent News & Developments.
         # This is last and failure-isolated so a missing key, timeout, or
         # Marketaux problem never hides Features 1–7.

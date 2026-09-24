@@ -60,6 +60,25 @@ class PerformanceTests(unittest.TestCase):
         self.assertIsNone(result["benchmark"]["3 Years"]["benchmark"])
         self.assertIsNone(result["benchmark"]["3 Years"]["difference"])
 
+    def test_performance_includes_volatility_inputs(self):
+        stock = history("2019-01-02", "2025-02-03")
+        benchmark = history("2019-01-02", "2025-02-03")
+
+        with patch("investment_research.performance.yf.Ticker") as ticker:
+            def make_ticker(symbol):
+                if symbol in {"AAPL", "^GSPC"}:
+                    return type("MockTicker", (), {"history": lambda self, **kwargs: stock if symbol == "AAPL" else benchmark})()
+                return type("MockTicker", (), {"history": lambda self, **kwargs: pd.DataFrame()})()
+
+            ticker.side_effect = make_ticker
+            result = get_performance("AAPL")
+
+        self.assertIsNotNone(result)
+        self.assertGreater(len(result["daily_returns"]), 0)
+        self.assertIsNotNone(result["annualized_volatility"])
+        self.assertIsNotNone(result["beta"])
+        self.assertIsNotNone(result["max_drawdown"])
+
     def test_incomplete_history_and_invalid_ticker(self):
         incomplete = history("2024-08-01", "2025-02-03")
         empty = pd.DataFrame(columns=["Adj Close", "Close", "High", "Low"])

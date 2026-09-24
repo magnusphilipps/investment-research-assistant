@@ -40,6 +40,69 @@ capability while keeping the code simple, modular, and well commented.
 
 ---
 
+## Feature 12A — Deterministic Stock Assessment Engine
+
+Feature 12A adds a deterministic assessment layer that turns the structured
+company evidence already present in the app into five standardized indicators:
+
+- Valuation
+- Financial Quality
+- Growth
+- Volatility
+- Expectations
+
+This engine is purposely separate from the UI and from any future Feature 13
+dashboard display. It only scores evidence already present in the application:
+company metadata, financial statements, ratios, price performance, analyst
+expectations, and peer comparison data. It never performs a new web search and
+it never calls Gemini.
+
+An assessment engine converts raw metrics into summary indicators by applying
+consistent scoring rules. The raw metric is not the same as the indicator: the
+indicator is a standardized label plus a hidden internal score, while the driver
+text explains the most material reasons behind the label. Scores stay hidden from
+future UI layers so the interface can remain simple, while the structured output
+keeps the logic transparent and testable.
+
+Peer medians are calculated metric-by-metric instead of by naively using a whole
+peer set. This matters because a company may have usable peer data for revenue
+growth but a broken or economically meaningless price/earnings metric. The code
+therefore validates each peer metric individually, removes unusable values, and
+only then compares the target metric to the remaining peer median.
+
+Valuation logic also adapts to the company profile. Profitable companies can use
+earnings-based multiples such as P/E and EV/EBITDA, while loss-making or
+early-stage companies rely more on sales-based multiples such as EV/Revenue.
+Without this adaptation, the model would misclassify fast-growing, unprofitable
+businesses as if they were mature earnings machines.
+
+The same idea is applied to financial-quality logic. Banks and other financial
+institutions are handled with a narrower, sector-aware set of metrics so the
+analysis is not penalized by industrial-company balance sheet rules that do not
+apply to banks.
+
+Growth and Expectations are intentionally distinct. Growth measures the business
+itself: revenue growth, trend, and operating margin trajectory. Expectations
+measure what the market/analyst consensus currently expects: forward revenue
+growth, recommendation mix, and target upside. Feature 12A never combines these
+into a single Buy/Hold/Sell recommendation or overall score.
+
+A simple example of the transformation is:
+
+```
+raw metrics
+→ component score
+→ weighted score
+→ standardized label
+```
+
+For example, a company with strong forward growth, a bullish recommendation mix,
+and a positive analyst target upside can produce an expectations score above the
+Positive threshold even though the underlying metrics remain separate and
+observable.
+
+---
+
 ## How to Run
 
 Open a terminal and run:
