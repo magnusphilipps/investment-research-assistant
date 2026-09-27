@@ -1376,7 +1376,7 @@ def print_news(result: dict) -> None:
 
 
 def print_stock_assessment(result: dict) -> None:
-    """Print the compact Feature 12A indicator summary without raw internals."""
+    """Print the compact Feature 12 assessment summary without raw internals."""
     separator = "-" * 64
 
     print()
@@ -1396,6 +1396,9 @@ def print_stock_assessment(result: dict) -> None:
         ("growth", "Growth"),
         ("volatility", "Volatility"),
         ("expectations", "Expectations"),
+        ("risk", "Risk"),
+        ("market_environment", "Market Environment"),
+        ("competitive_position", "Competitive Position"),
     ]
 
     for key, label in ordered_keys:

@@ -167,10 +167,10 @@ def compare_to_peer(company_value: Any, peer_median: Any) -> float | None:
         return -2.0
     if delta >= 0.10:
         return -1.0
-    if delta <= -0.10:
-        return 1.0
     if delta <= -0.25:
         return 2.0
+    if delta <= -0.10:
+        return 1.0
     return 0.0
 
 

@@ -1,10 +1,46 @@
 import unittest
+from unittest.mock import patch
 
 from investment_research.assessment import build_stock_assessment, assess_valuation
+from investment_research.assessment_scoring import compare_to_peer
+
+
+class TestCompareToPeer(unittest.TestCase):
+    def test_discount_and_premium_thresholds(self):
+        cases = (
+            (0.70, 2.0),
+            (0.85, 1.0),
+            (1.00, 0.0),
+            (1.15, -1.0),
+            (1.30, -2.0),
+        )
+        for company_value, expected_score in cases:
+            with self.subTest(company_value=company_value):
+                self.assertEqual(compare_to_peer(company_value, 1.0), expected_score)
+
+    def test_invalid_or_non_positive_values_return_none(self):
+        for company_value, peer_median in (
+            ("invalid", 1.0),
+            (1.0, "invalid"),
+            (0.0, 1.0),
+            (-1.0, 1.0),
+            (1.0, 0.0),
+            (1.0, -1.0),
+        ):
+            with self.subTest(company_value=company_value, peer_median=peer_median):
+                self.assertIsNone(compare_to_peer(company_value, peer_median))
 
 
 class TestFeature12A(unittest.TestCase):
-    def test_build_stock_assessment_returns_all_five_indicators(self):
+    def setUp(self):
+        self.gemini_patch = patch(
+            "investment_research.assessment.gemini_provider.generate_qualitative_assessment",
+            return_value={"status": "unavailable", "indicators": {}},
+        )
+        self.gemini_patch.start()
+        self.addCleanup(self.gemini_patch.stop)
+
+    def test_build_stock_assessment_returns_all_eight_indicators(self):
         context = {
             "company": {"sector": "Technology", "industry": "Software"},
             "financials": {
@@ -39,7 +75,10 @@ class TestFeature12A(unittest.TestCase):
         }
         result = build_stock_assessment(context)
         self.assertEqual(result["status"], "ok")
-        self.assertEqual(sorted(result["indicators"].keys()), ["expectations", "financial_quality", "growth", "valuation", "volatility"])
+        self.assertEqual(sorted(result["indicators"].keys()), [
+            "competitive_position", "expectations", "financial_quality", "growth",
+            "market_environment", "risk", "valuation", "volatility",
+        ])
         for indicator in result["indicators"].values():
             self.assertIn("label", indicator)
             self.assertIn("score", indicator)

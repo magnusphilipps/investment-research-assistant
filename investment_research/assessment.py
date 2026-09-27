@@ -3,6 +3,7 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from . import gemini_provider
 from .assessment_scoring import (
     array_first,
     build_driver,
@@ -730,8 +731,230 @@ def assess_expectations(context: dict[str, Any] | None) -> dict[str, Any]:
     return _standard_indicator(label, aggregate, drivers[:3], components, evidence)
 
 
+_QUALITATIVE_SCORE_MAP = {
+    "risk": {"Low": 0, "Medium": 1, "High": 2},
+    "market_environment": {"Unfavourable": -1, "Neutral": 0, "Favourable": 1},
+    "competitive_position": {"Weak": -1, "Moderate": 0, "Strong": 1},
+}
+
+
+def _string_list(value: Any) -> list[str]:
+    if isinstance(value, str):
+        return [value.strip()] if value.strip() else []
+    if not isinstance(value, list):
+        return []
+    return [item.strip() for item in value if isinstance(item, str) and item.strip()]
+
+
+def _latest(value: Any) -> Any:
+    return array_first(value)
+
+
+def _peer_qualitative_context(peer_data: Any, ticker: str | None) -> dict[str, Any]:
+    peers = _normalise_dict(peer_data)
+    tickers = peers.get("tickers")
+    peer_names = [
+        str(item).strip()
+        for item in tickers
+        if isinstance(item, (str, int)) and str(item).strip() and str(item).strip().upper() != (ticker or "").upper()
+    ] if isinstance(tickers, list) else []
+
+    notes = _string_list(peers.get("summary"))
+    dataframe = peers.get("df")
+    if dataframe is not None and hasattr(dataframe, "to_dict"):
+        try:
+            metric_rows = dataframe.to_dict(orient="index")
+        except (TypeError, ValueError):
+            metric_rows = {}
+        if isinstance(metric_rows, dict):
+            for metric, row in metric_rows.items():
+                if not isinstance(row, dict):
+                    continue
+                values = [
+                    f"{name}: {numeric}"
+                    for name, value in row.items()
+                    if str(name).upper() != (ticker or "").upper()
+                    and (numeric := safe_numeric(value)) is not None
+                ]
+                if values:
+                    notes.append(f"{metric} — " + "; ".join(values))
+
+    return {"peer_names": peer_names, "peer_notes": notes[:12]}
+
+
+def build_qualitative_context(context: dict[str, Any]) -> dict[str, Any]:
+    """Compact the already-collected company, financial, Feature 9/10, and peer evidence."""
+    company = _normalise_dict(context.get("company"))
+    financials = _normalise_dict(context.get("financials"))
+    ratios = _normalise_dict(context.get("ratios"))
+    income = _normalise_dict(financials.get("income"))
+    balance = _normalise_dict(financials.get("balance"))
+    cashflow = _normalise_dict(financials.get("cashflow"))
+    profitability = _normalise_dict(ratios.get("profitability"))
+    strength = _normalise_dict(ratios.get("strength"))
+    ticker = str(context.get("ticker") or company.get("ticker") or company.get("symbol") or "").strip().upper()
+
+    feature9_result = _normalise_dict(context.get("company_analysis") or context.get("feature9_analysis"))
+    feature9 = _normalise_dict(feature9_result.get("analysis")) or feature9_result
+    feature10_result = _normalise_dict(context.get("market_review") or context.get("feature10"))
+    market_review = _normalise_dict(feature10_result.get("review")) or feature10_result
+    market_sources = feature10_result.get("sources")
+    sources: list[dict[str, Any]] = []
+    if isinstance(market_sources, list):
+        for source in market_sources[:6]:
+            if not isinstance(source, dict):
+                continue
+            compact_source = {
+                key: source.get(key)
+                for key in ("id", "title", "source", "published_at")
+                if source.get(key) is not None
+            }
+            content = source.get("content")
+            if isinstance(content, str) and content.strip():
+                compact_source["content"] = content.strip()[:600]
+            sources.append(compact_source)
+
+    financial_snapshot = {
+        "revenue_growth": safe_numeric(_latest(income.get("revenue_growth"))),
+        "operating_margin": (
+            safe_numeric(_close_value(profitability, ["op_margin", "operating_margin"]))
+            if _close_value(profitability, ["op_margin", "operating_margin"]) is not None
+            else safe_numeric(_latest(income.get("op_margin")))
+        ),
+        "free_cash_flow": safe_numeric(_latest(cashflow.get("free_cash_flow"))),
+        "debt_to_equity": (
+            safe_numeric(_close_value(strength, ["de_ratio", "debt_to_equity"]))
+            if _close_value(strength, ["de_ratio", "debt_to_equity"]) is not None
+            else safe_numeric(balance.get("de_ratio"))
+        ),
+    }
+
+    market_context = {
+        "industry_summary": market_review.get("industry_overview"),
+        "market_growth": market_review.get("market_outlook"),
+        "tailwinds": _string_list(market_review.get("growth_drivers")),
+        "headwinds": _string_list(market_review.get("industry_risks")),
+        "competitive_dynamics": _string_list(market_review.get("competitive_dynamics")),
+        "regulatory_environment": market_review.get("regulatory_environment"),
+        "macro_exposure": market_review.get("macro_exposure"),
+        "sources": sources,
+    }
+    company_analysis = {
+        "business_model": company.get("description"),
+        "key_strengths": [
+            item for item in (
+                feature9.get("financial_performance"),
+                feature9.get("peer_positioning"),
+            ) if isinstance(item, str) and item.strip()
+        ],
+        "key_risks": _string_list(feature9.get("key_factors_to_watch")),
+        "financial_position": feature9.get("financial_position"),
+        "recent_developments": feature9.get("recent_developments"),
+    }
+    return {
+        "ticker": ticker,
+        "company": {
+            "name": company.get("name"),
+            "sector": company.get("sector"),
+            "industry": company.get("industry"),
+            "description": company.get("description"),
+            "country": company.get("country"),
+        },
+        "financial_snapshot": financial_snapshot,
+        "market_review": market_context,
+        "company_analysis": company_analysis,
+        "peer_context": _peer_qualitative_context(
+            context.get("peer_comparison") or context.get("peers"),
+            ticker,
+        ),
+    }
+
+
+def _has_content(value: Any) -> bool:
+    if isinstance(value, str):
+        return bool(value.strip())
+    if isinstance(value, dict):
+        return any(_has_content(item) for item in value.values())
+    if isinstance(value, list):
+        return any(_has_content(item) for item in value)
+    return value is not None
+
+
+def _qualitative_evidence_available(qualitative_context: dict[str, Any], key: str) -> bool:
+    financial = _normalise_dict(qualitative_context.get("financial_snapshot"))
+    company_analysis = _normalise_dict(qualitative_context.get("company_analysis"))
+    market = _normalise_dict(qualitative_context.get("market_review"))
+    peers = _normalise_dict(qualitative_context.get("peer_context"))
+
+    if key == "risk":
+        financial_values = sum(value is not None for value in financial.values())
+        return (
+            financial_values >= 2
+            or _has_content(company_analysis.get("key_risks"))
+            or _has_content(market.get("headwinds"))
+        )
+    if key == "market_environment":
+        return any(_has_content(market.get(field)) for field in (
+            "industry_summary", "market_growth", "tailwinds", "headwinds", "competitive_dynamics",
+        ))
+    if key == "competitive_position":
+        return (
+            _has_content(peers.get("peer_names")) and _has_content(peers.get("peer_notes"))
+        ) or _has_content(company_analysis.get("key_strengths"))
+    return False
+
+
+def _qualitative_unavailable(reason: str) -> dict[str, Any]:
+    return unavailable_indicator(reason)
+
+
+def _assess_qualitative_indicators(qualitative_context: dict[str, Any]) -> dict[str, dict[str, Any]]:
+    indicators = {
+        key: _qualitative_unavailable("Insufficient evidence from previously collected features.")
+        for key in _QUALITATIVE_SCORE_MAP
+    }
+    eligible = {
+        key for key in _QUALITATIVE_SCORE_MAP
+        if _qualitative_evidence_available(qualitative_context, key)
+    }
+    if not eligible:
+        return indicators
+
+    try:
+        response = gemini_provider.generate_qualitative_assessment(qualitative_context)
+    except Exception:
+        return indicators
+    if not isinstance(response, dict) or response.get("status") != "ok":
+        return indicators
+    model_indicators = _normalise_dict(response.get("indicators"))
+
+    for key in eligible:
+        item = _normalise_dict(model_indicators.get(key))
+        label = item.get("label")
+        drivers = item.get("drivers")
+        evidence = item.get("evidence")
+        if not isinstance(label, str) or label not in _QUALITATIVE_SCORE_MAP[key]:
+            continue
+        if not isinstance(drivers, list) or not 2 <= len(drivers) <= 3:
+            continue
+        if any(not isinstance(text, str) or not text.strip() for text in drivers):
+            continue
+        if not isinstance(evidence, list) or not 1 <= len(evidence) <= 4:
+            continue
+        if any(not isinstance(text, str) or not text.strip() for text in evidence):
+            continue
+        indicators[key] = {
+            "label": label,
+            "score": _QUALITATIVE_SCORE_MAP[key][label],
+            "drivers": [text.strip() for text in drivers],
+            "components": {},
+            "evidence": [text.strip() for text in evidence],
+        }
+    return indicators
+
+
 def build_stock_assessment(context: dict[str, Any] | None = None, **kwargs: Any) -> dict[str, Any]:
-    """Build the Feature 12A stock assessment from structured existing data."""
+    """Build deterministic Feature 12A indicators and grounded qualitative 12B indicators."""
     if context is None:
         context = kwargs
     elif isinstance(context, dict) and kwargs:
@@ -762,6 +985,12 @@ def build_stock_assessment(context: dict[str, Any] | None = None, **kwargs: Any)
         "volatility": assess_volatility(normalized),
         "expectations": assess_expectations(normalized),
     }
+    qualitative_context = build_qualitative_context({
+        **normalized,
+        "company_analysis": context.get("company_analysis") or context.get("feature9_analysis"),
+        "market_review": context.get("market_review") or context.get("feature10"),
+    })
+    indicators.update(_assess_qualitative_indicators(qualitative_context))
     result = {"status": "ok", "indicators": indicators}
     if normalized.get("ticker") is not None:
         result["ticker"] = normalized["ticker"]
@@ -774,6 +1003,7 @@ __all__ = [
     "assess_growth",
     "assess_volatility",
     "assess_expectations",
+    "build_qualitative_context",
     "build_stock_assessment",
     "safe_numeric",
     "weighted_average",

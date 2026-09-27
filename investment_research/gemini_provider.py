@@ -117,6 +117,40 @@ BULL_BEAR_SCHEMA = {
     "required": ["bull_case", "bear_case", "swing_factors"],
 }
 
+QUALITATIVE_ASSESSMENT_SCHEMA = {
+    "type": "OBJECT",
+    "properties": {
+        "risk": {
+            "type": "OBJECT",
+            "properties": {
+                "label": {"type": "STRING", "enum": ["Low", "Medium", "High"]},
+                "drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                "evidence": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1, "maxItems": 4},
+            },
+            "required": ["label", "drivers", "evidence"],
+        },
+        "market_environment": {
+            "type": "OBJECT",
+            "properties": {
+                "label": {"type": "STRING", "enum": ["Unfavourable", "Neutral", "Favourable"]},
+                "drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                "evidence": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1, "maxItems": 4},
+            },
+            "required": ["label", "drivers", "evidence"],
+        },
+        "competitive_position": {
+            "type": "OBJECT",
+            "properties": {
+                "label": {"type": "STRING", "enum": ["Weak", "Moderate", "Strong"]},
+                "drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                "evidence": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1, "maxItems": 4},
+            },
+            "required": ["label", "drivers", "evidence"],
+        },
+    },
+    "required": ["risk", "market_environment", "competitive_position"],
+}
+
 _TEXT_FIELDS = (
     "financial_performance",
     "financial_position",
@@ -125,6 +159,12 @@ _TEXT_FIELDS = (
     "peer_positioning",
     "recent_developments",
 )
+
+_QUALITATIVE_LABELS = {
+    "risk": {"Low", "Medium", "High"},
+    "market_environment": {"Unfavourable", "Neutral", "Favourable"},
+    "competitive_position": {"Weak", "Moderate", "Strong"},
+}
 
 
 def _unavailable() -> dict[str, Any]:
@@ -155,6 +195,39 @@ def _validate_analysis(value: Any) -> dict[str, Any] | None:
         return None
     analysis["key_factors_to_watch"] = [factor.strip() for factor in factors]
     return analysis
+
+
+def _validate_qualitative_assessment(value: Any) -> dict[str, dict[str, Any]]:
+    """Validate each qualitative indicator independently for failure isolation."""
+    if not isinstance(value, dict) or set(value) - set(_QUALITATIVE_LABELS):
+        return {}
+
+    validated: dict[str, dict[str, Any]] = {}
+    for name, allowed_labels in _QUALITATIVE_LABELS.items():
+        indicator = value.get(name)
+        if not isinstance(indicator, dict) or set(indicator) != {"label", "drivers", "evidence"}:
+            continue
+
+        label = indicator.get("label")
+        drivers = indicator.get("drivers")
+        evidence = indicator.get("evidence")
+        if not isinstance(label, str) or label not in allowed_labels:
+            continue
+        if not isinstance(drivers, list) or not 2 <= len(drivers) <= 3:
+            continue
+        if any(not isinstance(item, str) or not item.strip() for item in drivers):
+            continue
+        if not isinstance(evidence, list) or not 1 <= len(evidence) <= 4:
+            continue
+        if any(not isinstance(item, str) or not item.strip() for item in evidence):
+            continue
+
+        validated[name] = {
+            "label": label,
+            "drivers": [item.strip() for item in drivers],
+            "evidence": [item.strip() for item in evidence],
+        }
+    return validated
 
 
 def _is_503(error: Exception) -> bool:
@@ -207,6 +280,71 @@ def _request_model(context: dict[str, Any], api_key: str) -> str:
     return str(getattr(response, "text", "") or "")
 
 
+def _request_qualitative_assessment_model(context: dict[str, Any], api_key: str) -> str:
+    """Request all three qualitative indicators in one grounded Gemini call."""
+    from google import genai
+    from google.genai import types
+
+    instructions = """
+You are producing a compact qualitative stock-assessment layer from supplied
+evidence only.
+
+General rules:
+- Use only the provided context. Do not use outside knowledge.
+- Do not invent or infer unsupported facts.
+- Do not provide investment advice or Buy/Hold/Sell conclusions.
+- Do not produce an overall score, assessment, or verdict.
+- If evidence is mixed, prefer the middle label.
+- If evidence is weak, incomplete, contradictory, or insufficient, say so in
+  the evidence/drivers. Do not make a confident guess.
+- Drivers explain why a label was chosen; evidence contains specific facts or
+  observations grounded in the supplied context.
+- Keep wording concise and suitable for a dashboard. Avoid duplicate drivers.
+
+RISK: Assess company-specific downside exposure, including supported evidence
+about regulatory/legal exposure, execution, customer concentration, supplier
+dependence, geographic/geopolitical exposure, business-model dependence,
+balance-sheet/funding pressure, operational vulnerabilities, or technology/
+product dependency. Low means relatively limited material company-specific
+risks in available evidence; Medium means meaningful but manageable or mixed
+risks; High means multiple significant or concentrated exposures.
+
+MARKET ENVIRONMENT: Assess the external industry/market backdrop, primarily
+from supplied market-review evidence: industry growth, demand, cyclicality,
+regulation, structural tailwinds/headwinds, macro sensitivity, and competitive
+intensity. Favourable means broadly supportive conditions; Neutral means mixed
+or balanced conditions; Unfavourable means material external headwinds dominate.
+
+COMPETITIVE POSITION: Assess relative strategic strength from supplied company
+and peer evidence: differentiation, scale, brand, switching costs, network
+effects, barriers to entry, pricing power, distribution, market position, and
+competitor/substitute pressure. Strong requires multiple durable advantages
+supported by evidence; Moderate means some advantages with material limitations
+or mixed evidence; Weak means limited differentiation or significant
+competitive disadvantage.
+
+Return exactly the three requested indicator objects and no other fields.
+""".strip()
+
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=(
+            "Assess the three qualitative indicators from this supplied context. "
+            "Return only the required JSON structure.\n\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction=instructions,
+            temperature=0.2,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+            response_schema=QUALITATIVE_ASSESSMENT_SCHEMA,
+        ),
+    )
+    return str(getattr(response, "text", "") or "")
+
+
 def generate_analysis(context: dict[str, Any]) -> dict[str, Any]:
     """
     Generate grounded analysis or a safe unavailable result.
@@ -247,6 +385,42 @@ def generate_analysis(context: dict[str, Any]) -> dict[str, Any]:
         cache.write("feature-9", context, result)
     except (OSError, TypeError, ValueError):
         pass
+    return result
+
+
+def generate_qualitative_assessment(context: dict[str, Any]) -> dict[str, Any]:
+    """Generate independently validated qualitative indicators from prior evidence."""
+    api_key = os.environ.get("GOOGLE_API_KEY")
+    if not api_key:
+        return {"status": "unavailable", "indicators": {}}
+
+    cached = cache.read("feature-12b", context)
+    if isinstance(cached, dict) and cached.get("status") == "ok":
+        cached_indicators = _validate_qualitative_assessment(cached.get("indicators"))
+        if set(cached_indicators) == set(_QUALITATIVE_LABELS):
+            return {"status": "ok", "indicators": cached_indicators}
+
+    raw_response = _request_with_retry(
+        lambda: _request_qualitative_assessment_model(context, api_key),
+        "FEATURE 12B",
+    )
+    if not raw_response or not raw_response.strip():
+        return {"status": "unavailable", "indicators": {}}
+    try:
+        decoded = json.loads(raw_response)
+    except (TypeError, ValueError):
+        return {"status": "unavailable", "indicators": {}}
+
+    indicators = _validate_qualitative_assessment(decoded)
+    if not indicators:
+        return {"status": "unavailable", "indicators": {}}
+
+    result = {"status": "ok", "indicators": indicators}
+    if set(indicators) == set(_QUALITATIVE_LABELS):
+        try:
+            cache.write("feature-12b", context, result)
+        except (OSError, TypeError, ValueError):
+            pass
     return result
 
 

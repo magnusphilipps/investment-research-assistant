@@ -173,26 +173,6 @@ def run() -> None:
             # display.print_analyst_expectations handles N/A values itself
             display.print_analyst_expectations(expectations_data)
 
-        # Feature 12A — deterministic stock assessment from the structured
-        # evidence already collected in Features 1–11. This never performs
-        # new research or calls Gemini; it only scores the data the app
-        # already has in memory.
-        assessment_context = {
-            "ticker": ticker,
-            "company": data,
-            "financials": fin,
-            "ratios": ratios,
-            "performance": price_performance,
-            "analyst_expectations": expectations_data,
-            "peer_comparison": peer_result,
-            "valuation": ratios.get("valuation", {}) if isinstance(ratios, dict) else {},
-        }
-        try:
-             assessment_result = assessment.build_stock_assessment(assessment_context)
-        except Exception:
-             assessment_result = {"status": "ok", "indicators": {}}
-
-        display.print_stock_assessment(assessment_result)
         # Feature 8 — Recent News & Developments.
         # This is last and failure-isolated so a missing key, timeout, or
         # Marketaux problem never hides Features 1–7.
@@ -254,3 +234,24 @@ def run() -> None:
                 "analysis": None,
             }
         display.print_bull_bear_analysis(bull_bear_result)
+
+        # Feature 12A remains deterministic. Feature 12B only consumes results
+        # already collected above and fails independently when Gemini is absent.
+        assessment_context = {
+            "ticker": ticker,
+            "company": data,
+            "financials": fin,
+            "ratios": ratios,
+            "performance": price_performance,
+            "analyst_expectations": expectations_data,
+            "peer_comparison": peer_result,
+            "valuation": ratios.get("valuation", {}) if isinstance(ratios, dict) else {},
+            "company_analysis": ai_result.get("analysis") if isinstance(ai_result, dict) else None,
+            "market_review": market_result,
+        }
+        try:
+            assessment_result = assessment.build_stock_assessment(assessment_context)
+        except Exception as error:
+            display.print_error(f"Could not build stock assessment: {error}")
+            assessment_result = {"status": "ok", "indicators": {}}
+        display.print_stock_assessment(assessment_result)

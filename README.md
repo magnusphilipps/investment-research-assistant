@@ -51,11 +51,13 @@ company evidence already present in the app into five standardized indicators:
 - Volatility
 - Expectations
 
-This engine is purposely separate from the UI and from any future Feature 13
-dashboard display. It only scores evidence already present in the application:
+The Feature 12 scoring layer is purposely separate from the UI and from any
+future Feature 13 dashboard display. Feature 12A only scores evidence already
+present in the application:
 company metadata, financial statements, ratios, price performance, analyst
-expectations, and peer comparison data. It never performs a new web search and
-it never calls Gemini.
+expectations, and peer comparison data. It never performs a new web search or
+calls Gemini; those deterministic 12A calculations remain independent of the
+qualitative Feature 12B provider call.
 
 An assessment engine converts raw metrics into summary indicators by applying
 consistent scoring rules. The raw metric is not the same as the indicator: the
@@ -86,6 +88,22 @@ itself: revenue growth, trend, and operating margin trajectory. Expectations
 measure what the market/analyst consensus currently expects: forward revenue
 growth, recommendation mix, and target upside. Feature 12A never combines these
 into a single Buy/Hold/Sell recommendation or overall score.
+
+### Feature 12B — Qualitative Stock Assessment
+
+Feature 12B adds Risk, Market Environment, and Competitive Position to the five
+Feature 12A indicators. Feature 12A stays deterministic because its labels and
+hidden scores follow explicit, repeatable rules over supplied metrics. The three
+new indicators require qualitative judgement across company, market-review,
+financial, and peer evidence, so the app makes one Gemini call for all three
+rather than separate calls with duplicated context and latency.
+
+Python still validates the exact allowed labels and evidence structure, maps
+labels to hidden scores, checks that relevant evidence exists, and integrates
+the results. It also owns retry and context-keyed caching behavior. If evidence
+is missing or an indicator response is malformed, that indicator is `N/A`
+instead of presenting a guessed label; the deterministic Feature 12A indicators
+remain available when Gemini cannot respond.
 
 A simple example of the transformation is:
 
