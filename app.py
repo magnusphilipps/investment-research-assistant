@@ -1,16 +1,34 @@
-"""Minimal Streamlit entry point for the structured research report."""
+"""Streamlit entry point for the stock assessment dashboard."""
+
+from html import escape
 
 from dotenv import load_dotenv
 import streamlit as st
 
 load_dotenv(".env")
 
-from investment_research import display, main
+from investment_research import assessment_display, display, main
 
 
 st.set_page_config(page_title="Investment Research Assistant")
 st.title("Investment Research Assistant")
 st.write("Research public companies using the existing analysis pipeline.")
+
+ASSESSMENT_STYLES = """
+<style>
+.assessment-badge {
+    display: inline-block;
+    padding: 0.15rem 0.55rem;
+    border-radius: 999px;
+    font-size: 0.85rem;
+    font-weight: 600;
+}
+.assessment-positive { color: #1b5e20; background: #e8f5e9; }
+.assessment-neutral { color: #34495e; background: #eef2f6; }
+.assessment-caution { color: #8a3b12; background: #fff3e0; }
+.assessment-muted { color: #65717c; background: #f1f3f5; }
+</style>
+"""
 
 with st.form("ticker_analysis_form"):
     ticker = st.text_input("Ticker", placeholder="e.g. AAPL").strip().upper()
@@ -40,8 +58,23 @@ if isinstance(report, dict):
     name = company.get("name") or "Company"
     symbol = report.get("ticker") or ""
     st.subheader(f"{name} ({symbol})")
-    st.write(f"Share Price: {display.format_price(company.get('price'))}")
-    st.write(f"Market Cap: {display.format_market_cap(company.get('market_cap'))}")
-    st.success("Analysis loaded successfully.")
-    st.caption("Development check — report data available:")
-    st.write([key for key in report if key != "errors"])
+    header_columns = st.columns(2)
+    header_columns[0].metric("Share Price", display.format_price(company.get("price")))
+    header_columns[1].metric("Market Cap", display.format_market_cap(company.get("market_cap")))
+
+    st.markdown(ASSESSMENT_STYLES, unsafe_allow_html=True)
+    st.subheader("Stock Assessment")
+    assessment_cards = assessment_display.get_assessment_display(report)
+    for start in range(0, len(assessment_cards), 4):
+        columns = st.columns(4)
+        for column, card in zip(columns, assessment_cards[start : start + 4]):
+            with column.container(border=True):
+                st.markdown(f"**{escape(card['name'])}**")
+                style = escape(card["style"])
+                label = escape(card["label"])
+                st.markdown(
+                    f'<span class="assessment-badge assessment-{style}">{label}</span>',
+                    unsafe_allow_html=True,
+                )
+                if card["driver"]:
+                    st.caption(card["driver"])

@@ -127,6 +127,20 @@ and a positive analyst target upside can produce an expectations score above the
 Positive threshold even though the underlying metrics remain separate and
 observable.
 
+### Feature 13B — Streamlit Stock Assessment Dashboard
+
+The Streamlit dashboard reads the existing `report["assessment"]` data. The
+interface does not calculate or change assessment scores: it displays the
+existing labels and the first available driver for each of the eight
+indicators. `st.columns()` arranges the cards in two rows of four on desktop.
+Small label badges use consistent visual states; they are only visual aids and
+are not recommendations. Internal scores are left out of the display data.
+
+After analysis, the report is stored in
+`st.session_state["research_report"]`. Streamlit can rerun the page when a
+widget changes, but rendering the dashboard reuses that saved report instead of
+running the analysis APIs again.
+
 ---
 
 ## How to Run
@@ -153,7 +167,7 @@ Type `quit` or `q` to exit.
 investment_research_assistant/
 │
 ├── run.py                          # Entry point — run this to start the app
-├── app.py                          # Minimal Streamlit report interface
+├── app.py                          # Streamlit stock assessment dashboard
 │
 ├── investment_research/            # All application code lives here
 │   ├── __init__.py                 # Marks the folder as a Python package
@@ -166,7 +180,8 @@ investment_research_assistant/
 │   ├── tavily_provider.py          # Isolated Tavily search integration
 │   ├── gemini_provider.py          # Isolated Google Gemini provider integration
 │   ├── performance.py               # Fetches adjusted prices and calculates performance metrics
-│   └── display.py                  # Formats and prints all output to the terminal
+│   ├── display.py                  # Formats and prints all output to the terminal
+│   └── assessment_display.py       # Extracts display-safe assessment card data
 │
 ├── README.md                       # This file
 ├── replit.md                       # Developer notes and project overview
@@ -180,7 +195,8 @@ investment_research_assistant/
 |---|---|
 | `run.py` | Single entry point. Imports `main.run()` and calls it. |
 | `investment_research/main.py` | Builds the structured report and renders it in the terminal. |
-| `app.py` | Minimal Streamlit presentation layer; delegates all analysis to `build_report()`. |
+| `app.py` | Streamlit stock assessment dashboard; delegates analysis to `build_report()`. |
+| `investment_research/assessment_display.py` | Extracts labels and first drivers without exposing hidden assessment scores. |
 | `investment_research/fetcher.py` | Fetches price, market cap, and company overview from `ticker.info`. |
 | `investment_research/financials.py` | Fetches annual statements (DataFrames), extracts line items with fallback label lists, calculates margins/ratios/FCF. |
 | `investment_research/news.py` | Reads `MARKETAUX_API_KEY`, requests recent Marketaux news, standardises article metadata, and handles API failures. |
