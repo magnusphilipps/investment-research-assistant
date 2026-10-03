@@ -24,6 +24,36 @@
 import yfinance as yf  # Third-party library for fetching stock data
 
 
+def is_not_found_error(error: Exception) -> bool:
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) == 404:
+        return True
+    return type(error).__name__ in {"YFTickerMissingError", "YFPricesMissingError"}
+
+
+def is_resolved_security(ticker_symbol: str, info: dict) -> bool:
+    """Require a matching provider symbol plus independent security identity evidence."""
+    resolved_symbol = str(info.get("symbol") or "").strip().upper().replace(".", "-")
+    requested_symbol = str(ticker_symbol).strip().upper().replace(".", "-")
+    if not resolved_symbol or resolved_symbol != requested_symbol:
+        return False
+
+    names = (info.get("longName"), info.get("shortName"))
+    has_company_name = any(
+        isinstance(name, str)
+        and name.strip()
+        and name.strip().casefold() not in {
+            "unknown", "n/a", "not available", requested_symbol.casefold(),
+        }
+        for name in names
+    )
+    quote_type = str(info.get("quoteType") or "").strip().upper()
+    has_equity_listing = quote_type == "EQUITY" and bool(
+        info.get("exchange") or info.get("fullExchangeName") or info.get("market")
+    )
+    return has_company_name or has_equity_listing
+
+
 def get_stock_info(ticker_symbol: str) -> dict | None:
     """
     Fetch stock and company overview information for a given ticker symbol.
@@ -48,11 +78,15 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
     # It returns a large dictionary of company data from Yahoo Finance.
     # Importantly, this single call returns ALL the data we need for
     # both Phase 1 (price) and Phase 2 (overview) — no extra requests.
-    info = ticker.info
+    try:
+        info = ticker.info
+    except Exception as error:
+        if is_not_found_error(error):
+            return None
+        raise
 
-    # Yahoo Finance returns a mostly-empty dict for invalid tickers.
-    # We check for "symbol" as a signal that we got real data back.
-    if not info or "symbol" not in info:
+    # Yahoo may return the requested symbol even when it has no security record.
+    if not isinstance(info, dict) or not is_resolved_security(ticker_symbol, info):
         return None
 
     # ----------------------------------------------------------------
@@ -96,6 +130,8 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
         "sector":      sector,
         "industry":    industry,
         "country":     country,
+        "exchange":    info.get("exchange") or info.get("fullExchangeName"),
+        "market":      info.get("market"),
         "employees":   employees,
         "website":     website,
         "description": description,

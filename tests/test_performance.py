@@ -3,8 +3,10 @@ from unittest.mock import patch
 
 import pandas as pd
 
+from investment_research import display
 from investment_research.performance import (
     _calculate_52_week_range,
+    _benchmark_for_listing,
     get_performance,
 )
 
@@ -22,6 +24,61 @@ def history(start: str, end: str) -> pd.DataFrame:
 
 
 class PerformanceTests(unittest.TestCase):
+    def test_listing_market_selects_a_relevant_local_benchmark(self):
+        cases = (
+            ("NASDAQ", "us_market", "^GSPC", "S&P 500"),
+            ("LSE", "gb_market", "^FTSE", "FTSE 100"),
+            ("JPX", "jp_market", "^N225", "Nikkei 225"),
+            ("TSX", "ca_market", "^GSPTSE", "S&P/TSX Composite"),
+        )
+        stock = history("2019-01-02", "2025-02-03")
+
+        for exchange, market, symbol, name in cases:
+            with self.subTest(exchange=exchange):
+                with patch(
+                    "investment_research.performance._history_for_ticker",
+                    side_effect=lambda ticker: stock,
+                ) as get_history:
+                    result = get_performance("TEST", exchange=exchange, market=market)
+
+                get_history.assert_any_call(symbol)
+                self.assertEqual(result["benchmark_symbol"], symbol)
+                self.assertEqual(result["benchmark_name"], name)
+                self.assertEqual(result["benchmark_source"], "listing_market")
+                self.assertIsNotNone(result["benchmark"]["1 Year"]["difference"])
+
+    def test_unknown_or_missing_listing_uses_an_explicit_fallback(self):
+        for exchange, market in ((None, None), ("UNKNOWN", "unknown_market")):
+            with self.subTest(exchange=exchange):
+                self.assertEqual(
+                    _benchmark_for_listing(exchange, market),
+                    ("^GSPC", "S&P 500 (fallback)", "fallback"),
+                )
+        self.assertEqual(
+            _benchmark_for_listing("LSE", "us_market"),
+            ("^FTSE", "FTSE 100", "listing_market"),
+        )
+
+    def test_display_names_the_selected_benchmark(self):
+        with patch("builtins.print") as printer:
+            display.print_performance({
+                "returns": {"1 Month": None, "6 Months": None, "1 Year": 0.1, "3 Years": None, "5 Years": None},
+                "range": {},
+                "benchmark_name": "FTSE 100",
+                "benchmark": {
+                    "1 Year": {"stock": 0.1, "benchmark": 0.05, "difference": 0.05},
+                    "3 Years": {"stock": None, "benchmark": None, "difference": None},
+                    "5 Years": {"stock": None, "benchmark": None, "difference": None},
+                },
+            })
+        output = " ".join(str(call.args[0]) for call in printer.call_args_list if call.args)
+        self.assertIn("VS FTSE 100", output)
+        self.assertIn("outperformed FTSE 100", display._performance_summary({
+            "returns": {"1 Year": 0.1},
+            "benchmark_name": "FTSE 100",
+            "benchmark": {"1 Year": {"difference": 0.05}},
+        }))
+
     def test_mature_company_has_all_periods_and_range(self):
         stock = history("2019-01-02", "2025-02-03")
         benchmark = history("2019-01-02", "2025-02-03")

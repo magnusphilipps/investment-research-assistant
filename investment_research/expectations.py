@@ -52,7 +52,11 @@ def _format_pct(raw: Optional[float]) -> Optional[float]:
     return _safe_number(raw)
 
 
-def get_analyst_expectations(ticker_symbol: str) -> Dict[str, Any]:
+def get_analyst_expectations(
+    ticker_symbol: str,
+    *,
+    revenue_stage: str | None = None,
+) -> Dict[str, Any]:
     """
     Top-level function returning analyst expectations for a ticker.
 
@@ -246,7 +250,9 @@ def get_analyst_expectations(ticker_symbol: str) -> Dict[str, Any]:
                 for entry in trend:
                     period = entry.get("period")
                     rev = _safe_number(entry.get("revenue"))
-                    growth = _safe_number(entry.get("revenueGrowth")) or _safe_number(entry.get("growth"))
+                    growth = _safe_number(entry.get("revenueGrowth"))
+                    if growth is None:
+                        growth = _safe_number(entry.get("growth"))
                     if period and "current" in period.lower():
                         revenue_estimates["current_year"]["revenue"] = rev
                         revenue_estimates["current_year"]["growth"] = growth
@@ -315,6 +321,18 @@ def get_analyst_expectations(ticker_symbol: str) -> Dict[str, Any]:
         # Ignore parsing errors — leave revenue_estimates as previously found/None
         pass
 
+    for period in revenue_estimates.values():
+        growth = period.get("growth")
+        period["growth_status"] = (
+            "unavailable" if growth is None
+            else "valid_zero" if growth == 0
+            else "available"
+        )
+        if revenue_stage == "pre_revenue":
+            period["reported_growth"] = growth
+            period["growth"] = None
+            period["growth_status"] = "not_meaningful"
+
     # --- Short factual summary (rule-based) -----------------------
     summary_lines: list[str] = []
 
@@ -324,7 +342,11 @@ def get_analyst_expectations(ticker_symbol: str) -> Dict[str, Any]:
     cy_g = revenue_estimates["current_year"]["growth"]
     ny_g = revenue_estimates["next_year"]["growth"]
 
-    if cy_rev is not None or ny_rev is not None or cy_g is not None or ny_g is not None:
+    if revenue_stage == "pre_revenue":
+        summary_lines.append(
+            "Revenue growth estimates are not meaningful without an established revenue base."
+        )
+    elif cy_rev is not None or ny_rev is not None or cy_g is not None or ny_g is not None:
         # If any forward revenue number exists, try to state a factual summary
         if ny_rev is not None and cy_rev is not None and cy_rev != 0:
             # Compute growth between current and next year if both available

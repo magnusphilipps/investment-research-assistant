@@ -1,257 +1,231 @@
-# ============================================================
-# main.py — Application Logic
-# ============================================================
-#
-# PURPOSE:
-#   This is the "brain" of the application. It doesn't fetch
-#   data itself, and it doesn't format output itself — it
-#   delegates those jobs to the other modules and coordinates
-#   the overall flow.
-#
-# FLOW:
-#   1. Show a welcome message.
-#   2. Ask the user to type a ticker symbol.
-#   3. Pass the ticker to fetcher.get_stock_info().
-#   4. If data comes back, pass it to display.print_stock_info().
-#   5. If something goes wrong, show a helpful error.
-#   6. Repeat until the user types 'quit'.
-# ============================================================
+"""Application orchestration shared by the terminal and Streamlit interfaces."""
 
-# We import our own modules from the same package.
-# The dot (.) means "from the current package (investment_research)".
+from __future__ import annotations
+
+from typing import Any
+
+from . import assessment
+from . import analysis
+from . import display
+from . import expectations
 from . import fetcher
 from . import financials
-from . import display
-from . import performance
-from . import expectations
-from . import peers
-from . import news
-from . import analysis
-from . import assessment
 from . import market_research
+from . import news
+from . import peers
+from . import performance
+
+
+class ReportBuildError(Exception):
+    """Raised when required company or financial data prevents report creation."""
+
+
+def build_report(ticker: str) -> dict[str, Any] | None:
+    """Run the existing analysis pipeline once and return its structured results.
+
+    Returns None when the ticker does not resolve to a public security. Optional
+    providers are isolated and represented by their usual unavailable result.
+    """
+    symbol = ticker.strip().upper()
+    if not symbol:
+        return None
+
+    try:
+        company = fetcher.get_stock_info(symbol)
+    except Exception as error:
+        raise ReportBuildError(f"Could not retrieve data: {error}") from error
+    if company is None:
+        return None
+
+    try:
+        statements = financials.get_financial_statements(symbol)
+    except Exception as error:
+        raise ReportBuildError(f"Could not retrieve financial statements: {error}") from error
+    if statements is None:
+        raise ReportBuildError("Financial statement data unavailable for this ticker.")
+
+    errors: dict[str, str] = {}
+    try:
+        ratios = financials.get_ratios(symbol, statements)
+    except Exception as error:
+        ratios = {}
+        errors["ratios"] = f"Could not compute financial ratios: {error}"
+
+    peer_result = {
+        "available": False,
+        "message": "Peer comparison unavailable for this company.",
+    }
+    try:
+        peer_result = peers.fetch_peer_comparison(symbol)
+    except Exception as error:
+        errors["peers"] = f"Could not retrieve peer comparison: {error}"
+
+    try:
+        price_performance = performance.get_performance(
+            symbol,
+            exchange=company.get("exchange"),
+            market=company.get("market"),
+        )
+    except Exception as error:
+        price_performance = None
+        errors["price_performance"] = f"Could not retrieve stock price performance: {error}"
+    if price_performance is None and "price_performance" not in errors:
+        errors["price_performance"] = "Stock price performance data unavailable for this ticker."
+
+    expectations_data = {}
+    try:
+        income = statements.get("income")
+        revenue_stage = income.get("revenue_stage") if isinstance(income, dict) else None
+        expectations_data = expectations.get_analyst_expectations(
+            symbol,
+            revenue_stage=revenue_stage,
+        )
+    except Exception as error:
+        errors["expectations"] = f"Could not retrieve analyst expectations: {error}"
+
+    try:
+        news_result = news.get_company_news(symbol)
+    except Exception:
+        news_result = {
+            "status": "unavailable",
+            "message": "Recent news temporarily unavailable.",
+            "articles": [],
+        }
+
+    analysis_context = analysis.build_analysis_context(
+        ticker=symbol,
+        stock_info=company,
+        financials=statements,
+        ratios=ratios,
+        performance=price_performance,
+        expectations=expectations_data,
+        peers=peer_result,
+        news=news_result,
+    )
+    try:
+        company_analysis = analysis.get_ai_analysis(analysis_context)
+    except Exception:
+        company_analysis = {
+            "status": "unavailable",
+            "message": "AI analysis temporarily unavailable.",
+            "analysis": None,
+        }
+
+    try:
+        market_review = market_research.get_market_review(company)
+    except Exception:
+        market_review = {
+            "status": "unavailable",
+            "message": "Market & industry review temporarily unavailable.",
+            "review": None,
+            "sources": [],
+        }
+
+    bull_bear_context = analysis.build_bull_bear_context(analysis_context, market_review)
+    try:
+        bull_bear = analysis.get_bull_bear_analysis(bull_bear_context)
+    except Exception:
+        bull_bear = {
+            "status": "unavailable",
+            "message": "Bull / Bear analysis temporarily unavailable.",
+            "analysis": None,
+        }
+
+    assessment_context = {
+        "ticker": symbol,
+        "company": company,
+        "financials": statements,
+        "ratios": ratios,
+        "performance": price_performance,
+        "analyst_expectations": expectations_data,
+        "peer_comparison": peer_result,
+        "valuation": ratios.get("valuation", {}) if isinstance(ratios, dict) else {},
+        "company_analysis": company_analysis,
+        "market_review": market_review,
+    }
+    try:
+        stock_assessment = assessment.build_stock_assessment(assessment_context)
+    except Exception as error:
+        errors["assessment"] = f"Could not build stock assessment: {error}"
+        stock_assessment = {"status": "ok", "indicators": {}}
+
+    return {
+        "ticker": symbol,
+        "company": company,
+        "financials": statements,
+        "ratios": ratios,
+        "peers": peer_result,
+        "price_performance": price_performance,
+        "expectations": expectations_data,
+        "news": news_result,
+        "company_analysis": company_analysis,
+        "market_review": market_review,
+        "bull_bear": bull_bear,
+        "assessment": stock_assessment,
+        "errors": errors,
+    }
+
+
+def render_terminal_report(report: dict[str, Any]) -> None:
+    """Render a structured report using the existing terminal formatters."""
+    company = report["company"]
+    statements = report["financials"]
+    errors = report.get("errors", {})
+
+    display.print_stock_info(company)
+    display.print_company_overview(company)
+    display.print_income_statement(statements)
+    display.print_balance_sheet(statements)
+    display.print_cash_flow(statements)
+
+    if "ratios" in errors:
+        display.print_error(errors["ratios"])
+    else:
+        display.print_ratios(report["ratios"], statements)
+
+    if "peers" in errors:
+        display.print_error(errors["peers"])
+    else:
+        display.print_peer_comparison(report["peers"])
+
+    if "price_performance" in errors:
+        display.print_error(errors["price_performance"])
+    else:
+        display.print_performance(report["price_performance"])
+
+    if "expectations" in errors:
+        display.print_error(errors["expectations"])
+    else:
+        display.print_analyst_expectations(report["expectations"])
+
+    display.print_news(report["news"])
+    display.print_ai_analysis(report["company_analysis"])
+    display.print_market_review(report["market_review"], company.get("name") or report["ticker"])
+    display.print_bull_bear_analysis(report["bull_bear"])
+    if "assessment" in errors:
+        display.print_error(errors["assessment"])
+    display.print_stock_assessment(report["assessment"])
 
 
 def run() -> None:
-    """
-    Main loop of the Investment Research Assistant.
-
-    This function runs until the user chooses to exit.
-    A "loop" in Python repeats a block of code indefinitely
-    until you explicitly break out of it with `break`.
-    """
-
-    # Show the welcome banner once, when the program starts.
+    """Run the interactive terminal workflow using the shared report pipeline."""
     display.print_welcome()
-
-    # `while True` creates an infinite loop.
-    # The only way out is a `break` statement inside the loop.
     while True:
-
-        # input() pauses the program and waits for the user to type
-        # something and press Enter. It returns whatever they typed
-        # as a string.
-        raw_input = input("  Enter ticker symbol: ")
-
-        # .strip() removes any accidental spaces before/after the text.
-        # .upper() converts to uppercase so "aapl" works like "AAPL".
-        ticker = raw_input.strip().upper()
-
-        # If the user typed nothing, skip this iteration of the loop
-        # and ask again. `continue` jumps back to the top of the loop.
+        ticker = input("  Enter ticker symbol: ").strip().upper()
         if not ticker:
             display.print_error("Please enter a ticker symbol.")
             continue
-
-        # Let the user exit cleanly by typing 'quit' or 'q'.
         if ticker in ("QUIT", "Q"):
             print("\n  Goodbye!\n")
-            break  # Exit the while loop, ending the program.
+            break
 
-        # Tell the user we are working — network requests can take a moment.
         print(f"\n  Looking up {ticker}...")
-
-        # Attempt to fetch the stock data.
-        # We wrap this in a try/except block to handle unexpected errors
-        # gracefully (e.g. no internet connection, API timeout).
         try:
-            data = fetcher.get_stock_info(ticker)
-        except Exception as error:
-            # `Exception` catches most runtime errors.
-            # We log the raw error message so the user can see what went wrong.
-            display.print_error(f"Could not retrieve data: {error}")
-            continue  # Go back to the top of the loop and ask again.
-
-        # If fetcher returned None, the ticker was invalid or had no data.
-        if data is None:
-            display.print_error(
-                f"'{ticker}' does not appear to be a valid ticker symbol. "
-                "Double-check it and try again."
-            )
+            report = build_report(ticker)
+        except ReportBuildError as error:
+            display.print_error(str(error))
             continue
-
-        # All good — display Phase 1 and Phase 2 information.
-        # Each function receives the same `data` dictionary; they each
-        # just read the keys that belong to their section.
-        display.print_stock_info(data)
-        display.print_company_overview(data)
-
-        # Phase 3 — Financial Statements.
-        # financials.get_financial_statements() makes a separate set of
-        # yfinance calls (.financials, .balance_sheet, .cashflow) which
-        # return pandas DataFrames.  We wrap this in its own try/except
-        # so a failure here does not hide the Phase 1/2 output already
-        # printed above.
-        try:
-            fin = financials.get_financial_statements(ticker)
-        except Exception as error:
-            display.print_error(f"Could not retrieve financial statements: {error}")
+        if report is None:
+            display.print_error("Ticker not found. Check the symbol and try again.")
             continue
-
-        if fin is None:
-            # This should not happen (ticker already validated above),
-            # but we handle it defensively.
-            display.print_error("Financial statement data unavailable for this ticker.")
-            continue
-
-        display.print_income_statement(fin)
-        display.print_balance_sheet(fin)
-        display.print_cash_flow(fin)
-
-        # Feature 4 — Financial Ratios & Valuation.
-        # get_ratios() reuses the already-fetched `fin` dict for the
-        # calculated ratios and makes one additional ticker.info call
-        # for live market valuation metrics.
-        ratios = {}
-        try:
-            ratios = financials.get_ratios(ticker, fin)
-        except Exception as error:
-            display.print_error(f"Could not compute financial ratios: {error}")
-            # We do not `continue` here — the main financial data was
-            # already printed above, so we just skip the ratios section
-            # and let the loop ask for the next ticker naturally.
-        else:
-            display.print_ratios(ratios, fin)
-
-        # Feature 7 — Peer Comparison (keeps failures non-fatal)
-        peer_result = {
-            "available": False,
-            "message": "Peer comparison unavailable for this company.",
-        }
-        try:
-            peer_result = peers.fetch_peer_comparison(ticker)
-        except Exception as error:
-            display.print_error(f"Could not retrieve peer comparison: {error}")
-        else:
-            try:
-                display.print_peer_comparison(peer_result)
-            except Exception as error:
-                # Ensure any display error here does not stop other features
-                display.print_error(f"Could not display peer comparison: {error}")
-
-        # Feature 5 — Stock Price Performance.
-        # This is independent from financial statements, so a failed history
-        # request should not remove the Features 1-4 output above.
-        price_performance = None
-        try:
-            price_performance = performance.get_performance(ticker)
-        except Exception as error:
-            display.print_error(f"Could not retrieve stock price performance: {error}")
-        else:
-            if price_performance is not None:
-                display.print_performance(price_performance)
-            else:
-                display.print_error("Stock price performance data unavailable for this ticker.")
-
-        # Feature 6 — Analyst Expectations & Forward Outlook
-        # Keep failures here non-fatal so earlier features remain visible.
-        expectations_data = {}
-        try:
-            expectations_data = expectations.get_analyst_expectations(ticker)
-        except Exception as error:
-            display.print_error(f"Could not retrieve analyst expectations: {error}")
-        else:
-            # display.print_analyst_expectations handles N/A values itself
-            display.print_analyst_expectations(expectations_data)
-
-        # Feature 8 — Recent News & Developments.
-        # This is last and failure-isolated so a missing key, timeout, or
-        # Marketaux problem never hides Features 1–7.
-        try:
-            news_result = news.get_company_news(ticker)
-        except Exception:
-            news_result = {
-                "status": "unavailable",
-                "message": "Recent news temporarily unavailable.",
-                "articles": [],
-            }
-        display.print_news(news_result)
-
-        # Feature 9 — Grounded AI Analysis.
-        # The context is assembled from results already collected above; the
-        # AI layer does not refetch yfinance or Marketaux data.
-        analysis_context = analysis.build_analysis_context(
-            ticker=ticker,
-            stock_info=data,
-            financials=fin,
-            ratios=ratios,
-            performance=price_performance,
-            expectations=expectations_data,
-            peers=peer_result,
-            news=news_result,
-        )
-        try:
-            ai_result = analysis.get_ai_analysis(analysis_context)
-        except Exception:
-            ai_result = {
-                "status": "unavailable",
-                "message": "AI analysis temporarily unavailable.",
-                "analysis": None,
-            }
-        display.print_ai_analysis(ai_result)
-
-        # Feature 10 — Current, externally retrieved market and industry context.
-        # Retrieval and synthesis are isolated so provider failures cannot hide
-        # the completed Features 1–9 report.
-        try:
-            market_result = market_research.get_market_review(data)
-        except Exception:
-            market_result = {
-                "status": "unavailable",
-                "message": "Market & industry review temporarily unavailable.",
-                "review": None,
-                "sources": [],
-            }
-        display.print_market_review(market_result, data.get("name") or ticker)
-
-        # Feature 11 — Conditional Bull/Bear scenarios from structured evidence.
-        bull_bear_context = analysis.build_bull_bear_context(analysis_context, market_result)
-        try:
-            bull_bear_result = analysis.get_bull_bear_analysis(bull_bear_context)
-        except Exception:
-            bull_bear_result = {
-                "status": "unavailable",
-                "message": "Bull / Bear analysis temporarily unavailable.",
-                "analysis": None,
-            }
-        display.print_bull_bear_analysis(bull_bear_result)
-
-        # Feature 12A remains deterministic. Feature 12B only consumes results
-        # already collected above and fails independently when Gemini is absent.
-        assessment_context = {
-            "ticker": ticker,
-            "company": data,
-            "financials": fin,
-            "ratios": ratios,
-            "performance": price_performance,
-            "analyst_expectations": expectations_data,
-            "peer_comparison": peer_result,
-            "valuation": ratios.get("valuation", {}) if isinstance(ratios, dict) else {},
-            "company_analysis": ai_result.get("analysis") if isinstance(ai_result, dict) else None,
-            "market_review": market_result,
-        }
-        try:
-            assessment_result = assessment.build_stock_assessment(assessment_context)
-        except Exception as error:
-            display.print_error(f"Could not build stock assessment: {error}")
-            assessment_result = {"status": "ok", "indicators": {}}
-        display.print_stock_assessment(assessment_result)
+        render_terminal_report(report)

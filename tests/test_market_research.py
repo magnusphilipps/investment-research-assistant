@@ -47,9 +47,24 @@ class TavilyProviderTests(unittest.TestCase):
         self.assertEqual(result, payload["results"])
         self.assertNotIn("secret", str(result))
         self.assertEqual(request.call_args.kwargs["json"]["api_key"], "secret")
+        self.assertEqual(request.call_args.kwargs["json"]["search_depth"], "basic")
+        self.assertEqual(
+            request.call_args.kwargs["json"]["max_results"],
+            tavily_provider.MAX_RESULTS_PER_QUERY,
+        )
 
 
 class MarketResearchTests(unittest.TestCase):
+    def setUp(self):
+        cache_read = patch(
+            "investment_research.market_research.cache.read", return_value=None
+        )
+        cache_write = patch("investment_research.market_research.cache.write")
+        cache_read.start()
+        cache_write.start()
+        self.addCleanup(cache_write.stop)
+        self.addCleanup(cache_read.stop)
+
     def test_known_companies_receive_narrow_economic_research_lenses(self):
         cases = [
             ({"name": "Materials Co.", "description": "Produces rare earth NdPr materials and permanent magnets."}, "rare earths"),
@@ -105,10 +120,31 @@ class MarketResearchTests(unittest.TestCase):
             "name": "Regional Bank",
             "sector": "Financial Services",
             "industry": "Banks",
+            "country": "United Kingdom",
         })
-        self.assertEqual(len(queries), 5)
-        self.assertTrue(all("Banks" in query for query in queries[:4]))
-        self.assertIn("value chain", queries[1])
+        self.assertEqual(len(queries), 1)
+        self.assertIn("Banks", queries[0])
+        self.assertIn("Regional Bank", queries[0])
+        self.assertIn("XYZ", queries[0])
+        self.assertIn("Financial Services", queries[0])
+        self.assertIn("United Kingdom", queries[0])
+        for topic in (
+            "market outlook", "demand growth", "product-market fit",
+            "competition", "regulation", "macro risks",
+        ):
+            self.assertIn(topic, queries[0])
+
+    def test_research_focus_covers_adoption_commercialization_and_demand_barriers(self):
+        info = {
+            "name": "Example Energy",
+            "industry": "Power Generation",
+            "description": "Develops advanced nuclear energy projects.",
+        }
+        focus = market_research.build_research_focus(info)
+        queries = market_research.build_queries(info)
+        self.assertIn("customer adoption", focus["drivers"])
+        self.assertIn("commercialization", focus["drivers"])
+        self.assertTrue(any("product-market fit" in query for query in queries))
 
     def test_cleaning_removes_invalid_and_duplicate_results(self):
         results = market_research.clean_evidence([
@@ -130,19 +166,136 @@ class MarketResearchTests(unittest.TestCase):
     def test_successful_review_maps_only_valid_source_ids(self):
         raw = [{"title": "Evidence", "url": "https://example.com/a", "content": "Industry evidence"}]
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
-            "investment_research.market_research.tavily_provider.search", return_value=raw
+            "investment_research.market_research.cache.read", return_value=None
         ), patch(
+            "investment_research.market_research.cache.write"
+        ) as cache_write, patch(
+            "investment_research.market_research.tavily_provider.search", return_value=raw
+        ) as search, patch(
             "investment_research.market_research.gemini_provider.generate_market_review",
             return_value={"status": "ok", "review": valid_review()},
         ):
             result = market_research.get_market_review({"name": "Example", "industry": "Example industry"})
         self.assertEqual(result["status"], "ok")
         self.assertEqual(result["sources"][0]["url"], "https://example.com/a")
+        self.assertEqual(set(result), {"status", "message", "review", "sources"})
+        search.assert_called_once_with(
+            market_research.build_queries({"name": "Example", "industry": "Example industry"})[0],
+            max_results=7,
+            search_depth="basic",
+        )
+        cache_write.assert_called_once()
+        self.assertEqual(cache_write.call_args.args[0], "feature-10-market-review")
+
+    def test_repeated_same_context_uses_full_review_cache_and_makes_no_search(self):
+        raw = [{
+            "title": "Industry evidence",
+            "url": "https://example.com/market",
+            "content": "Grounded market evidence",
+            "published_date": "2026-09-01",
+            "score": 0.9,
+        }]
+        saved = {}
+
+        def cache_read(feature, context):
+            return saved.get((feature, repr(context)))
+
+        def cache_write(feature, context, value):
+            saved[(feature, repr(context))] = value
+
+        info = {
+            "ticker": "JPM",
+            "name": "JPMorgan Chase",
+            "sector": "Financial Services",
+            "industry": "Banks",
+            "country": "United States",
+        }
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.market_research.cache.read", side_effect=cache_read
+        ), patch(
+            "investment_research.market_research.cache.write", side_effect=cache_write
+        ), patch(
+            "investment_research.market_research.tavily_provider.search", return_value=raw
+        ) as search, patch(
+            "investment_research.market_research.gemini_provider.generate_market_review",
+            return_value={"status": "ok", "review": valid_review()},
+        ) as generate, self.assertLogs(market_research.LOGGER, level="DEBUG") as diagnostics:
+            first = market_research.get_market_review(info)
+            second = market_research.get_market_review(info)
+
+        self.assertEqual(first, second)
+        search.assert_called_once()
+        generate.assert_called_once()
+        self.assertIn("cache miss; Tavily search count=1", diagnostics.output[0])
+        self.assertIn("cache hit; Tavily searches=0", diagnostics.output[1])
+        self.assertEqual(second["sources"][0]["published_at"], "2026-09-01")
+        self.assertEqual(second["sources"][0]["relevance_score"], 0.9)
+
+    def test_different_ticker_or_research_context_gets_a_separate_cache_key(self):
+        seen_contexts = []
+
+        def read_cache(feature, context):
+            seen_contexts.append(context)
+            return None
+
+        raw = [{"title": "Evidence", "url": "https://example.com/a", "content": "Industry evidence"}]
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.market_research.cache.read", side_effect=read_cache
+        ), patch("investment_research.market_research.cache.write"), patch(
+            "investment_research.market_research.tavily_provider.search", return_value=raw
+        ) as search, patch(
+            "investment_research.market_research.gemini_provider.generate_market_review",
+            return_value={"status": "ok", "review": valid_review()},
+        ):
+            market_research.get_market_review({
+                "ticker": "JPM", "name": "JPMorgan Chase", "industry": "Banks",
+                "sector": "Financial Services", "country": "United States",
+            })
+            market_research.get_market_review({
+                "ticker": "BAC", "name": "Bank of America", "industry": "Banks",
+                "sector": "Financial Services", "country": "United States",
+            })
+
+        self.assertEqual(search.call_count, 2)
+        self.assertNotEqual(seen_contexts[0]["ticker"], seen_contexts[1]["ticker"])
+        self.assertNotIn("share_price", seen_contexts[0])
+
+    def test_tavily_failure_and_invalid_review_are_not_cached(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.market_research.cache.read", return_value=None
+        ), patch(
+            "investment_research.market_research.cache.write"
+        ) as cache_write, patch(
+            "investment_research.market_research.tavily_provider.search",
+            side_effect=RuntimeError("quota"),
+        ):
+            result = market_research.get_market_review({"name": "Example", "industry": "Example industry"})
+
+        self.assertEqual(result["status"], "unavailable")
+        cache_write.assert_not_called()
+
+    def test_basic_search_uses_one_request_without_advanced_fallback(self):
+        raw = [{"title": "Enough evidence", "url": "https://example.com/a", "content": "Evidence"}]
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.market_research.cache.read", return_value=None
+        ), patch("investment_research.market_research.cache.write"), patch(
+            "investment_research.market_research.tavily_provider.search", return_value=raw
+        ) as search, patch(
+            "investment_research.market_research.gemini_provider.generate_market_review",
+            return_value={"status": "ok", "review": valid_review()},
+        ):
+            market_research.get_market_review({"name": "Example", "industry": "Example industry"})
+
+        search.assert_called_once()
+        self.assertEqual(search.call_args.kwargs["search_depth"], "basic")
+        self.assertEqual(search.call_args.kwargs["max_results"], 7)
 
     def test_unknown_source_ids_are_rejected(self):
         raw = [{"title": "Evidence", "url": "https://example.com/a", "content": "Industry evidence"}]
         invalid = valid_review(["S99"])
         with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.market_research.cache.write"
+        ) as cache_write, patch(
             "investment_research.market_research.tavily_provider.search", return_value=raw
         ), patch(
             "investment_research.market_research.gemini_provider.generate_market_review",
@@ -150,6 +303,26 @@ class MarketResearchTests(unittest.TestCase):
         ):
             result = market_research.get_market_review({"name": "Example", "industry": "Example industry"})
         self.assertEqual(result["status"], "unavailable")
+        cache_write.assert_not_called()
+
+    def test_overlong_market_bullet_is_rejected(self):
+        raw = [{"title": "Evidence", "url": "https://example.com/a", "content": "Industry evidence"}]
+        invalid_bullets = (
+            "A " + "very " * 20 + "long driver.",
+            "one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen",
+        )
+        for bullet in invalid_bullets:
+            with self.subTest(bullet=bullet):
+                invalid = valid_review()
+                invalid["growth_drivers"][0] = bullet
+                with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+                    "investment_research.market_research.tavily_provider.search", return_value=raw
+                ), patch(
+                    "investment_research.market_research.gemini_provider.generate_market_review",
+                    return_value={"status": "ok", "review": invalid},
+                ):
+                    result = market_research.get_market_review({"name": "Example", "industry": "Example industry"})
+                self.assertEqual(result["status"], "unavailable")
 
     def test_source_metadata_remains_internal(self):
         raw = [{"title": "Evidence", "url": "https://example.com/a", "content": "Industry evidence"}]

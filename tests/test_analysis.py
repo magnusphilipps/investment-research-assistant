@@ -166,6 +166,19 @@ class GeminiProviderTests(unittest.TestCase):
 
         self.assertEqual(result["status"], "unavailable")
 
+    def test_dashboard_factor_character_limit_is_enforced(self):
+        response = json.loads(_valid_model_response())
+        response["key_factors_to_watch"][0] = "x" * 91
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider._request_model",
+            return_value=json.dumps(response),
+        ), patch(
+            "investment_research.gemini_provider.cache.read",
+            return_value=None,
+        ):
+            result = generate_analysis({})
+        self.assertEqual(result["status"], "unavailable")
+
 
 class AnalysisDisplayTests(unittest.TestCase):
     def test_display_formats_success_without_printing_raw_json(self):

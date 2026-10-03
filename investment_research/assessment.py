@@ -15,6 +15,7 @@ from .assessment_scoring import (
     percent_from_value,
     safe_numeric,
     unavailable_indicator,
+    validate_qualitative_indicator,
     valid_metric_values,
     weighted_average,
 )
@@ -22,6 +23,37 @@ from .assessment_scoring import (
 
 def _normalise_dict(value: Any) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
+
+
+def _revenue_stage(income: dict[str, Any]) -> str:
+    """Determine whether structured revenue evidence identifies a pre-revenue business."""
+    stage = income.get("revenue_stage")
+    if isinstance(stage, str) and stage in {
+        "pre_revenue", "operating", "not_meaningful", "unavailable"
+    }:
+        return stage
+    revenues = income.get("revenue")
+    if not isinstance(revenues, (list, tuple)):
+        return "unavailable"
+    reported = [value for item in revenues if (value := safe_numeric(item)) is not None]
+    if reported and all(value == 0 for value in reported):
+        return "pre_revenue"
+    if any(value > 0 for value in reported):
+        return "operating"
+    return "not_meaningful" if reported else "unavailable"
+
+
+def _latest_revenue_status(income: dict[str, Any]) -> str:
+    statuses = income.get("revenue_status")
+    if isinstance(statuses, list) and statuses:
+        status = statuses[0]
+        if status in {"valid_zero", "available", "unavailable"}:
+            return status
+    revenues = income.get("revenue")
+    latest = safe_numeric(revenues[0]) if isinstance(revenues, (list, tuple)) and revenues else None
+    if latest is None:
+        return "unavailable"
+    return "valid_zero" if latest == 0 else "available"
 
 
 def _close_value(obj: Any, names: list[str]) -> Any:
@@ -159,6 +191,13 @@ def assess_valuation(context: dict[str, Any] | None) -> dict[str, Any]:
     valuation = context["valuation"]
     peer_data = context["peer_comparison"]
 
+    income = _normalise_dict(financials.get("income"))
+    revenue_stage = _revenue_stage(income)
+    if revenue_stage == "pre_revenue":
+        result = unavailable_indicator("Pre-revenue; valuation multiples are not meaningful.")
+        result["evidence"]["revenue_stage"] = revenue_stage
+        return result
+
     valuation_map = _normalise_dict(valuation)
     if not valuation_map and isinstance(ratios, dict):
         valuation_map = _normalise_dict(ratios.get("valuation"))
@@ -287,6 +326,8 @@ def assess_financial_quality(context: dict[str, Any] | None) -> dict[str, Any]:
 
     sector = str(company.get("sector") or "").lower()
     is_financial = any(token in sector for token in ["bank", "financial", "insurance", "broker", "asset management"])
+    income = _normalise_dict(financials.get("income"))
+    revenue_stage = _revenue_stage(income)
 
     components: dict[str, Any] = {}
     excluded: list[str] = []
@@ -297,7 +338,7 @@ def assess_financial_quality(context: dict[str, Any] | None) -> dict[str, Any]:
     if isinstance(financials, dict):
         income = _normalise_dict(financials.get("income"))
         revenue = array_first(income.get("revenue"))
-    if revenue is not None:
+    if revenue is not None and revenue_stage != "pre_revenue":
         fcf = None
         if isinstance(financials, dict):
             cashflow = _normalise_dict(financials.get("cashflow"))
@@ -318,11 +359,16 @@ def assess_financial_quality(context: dict[str, Any] | None) -> dict[str, Any]:
             else:
                 excluded.append("fcf_margin: no usable revenue or FCF")
     else:
-        excluded.append("fcf_margin: revenue missing")
+        if revenue_stage == "pre_revenue":
+            excluded.append("fcf_margin: not meaningful for a pre-revenue company")
+        else:
+            excluded.append("fcf_margin: revenue missing")
 
     # Operating margin relative to peers
     op_margin_company = safe_numeric(_close_value(ratios, ["profitability", "op_margin", "Operating Margin"]))
-    if op_margin_company is not None:
+    if revenue_stage == "pre_revenue":
+        excluded.append("operating_margin: not meaningful for a pre-revenue company")
+    elif op_margin_company is not None:
         peer_values = _peer_data_for_metric(peer_data, "Operating Margin", "op_margin")
         if peer_values:
             peer_median = metric_median(peer_values)
@@ -425,6 +471,11 @@ def assess_growth(context: dict[str, Any] | None) -> dict[str, Any]:
     expectations = context["expectations"]
 
     income = _normalise_dict(financials.get("income")) if isinstance(financials, dict) else {}
+    revenue_stage = _revenue_stage(income)
+    if revenue_stage == "pre_revenue":
+        result = unavailable_indicator("Pre-revenue; operating growth is not meaningful.")
+        result["evidence"]["revenue_stage"] = revenue_stage
+        return result
     revenue_growth = income.get("revenue_growth") if isinstance(revenue_growth := income.get("revenue_growth"), list) else []
     hist_value = safe_numeric(array_first(revenue_growth))
     forward_value = None
@@ -634,7 +685,9 @@ def assess_expectations(context: dict[str, Any] | None) -> dict[str, Any]:
             forward_growth = safe_numeric(next_year.get("growth"))
     if forward_growth is None:
         forward_growth = safe_numeric(_close_value(expectations, ["forward_revenue_growth", "revenue_growth"]))
-    if forward_growth is not None:
+    income = _normalise_dict(context["financials"].get("income"))
+    revenue_stage = _revenue_stage(income)
+    if forward_growth is not None and revenue_stage != "pre_revenue":
         if forward_growth > 15:
             score = 2.0
         elif forward_growth >= 5:
@@ -646,7 +699,11 @@ def assess_expectations(context: dict[str, Any] | None) -> dict[str, Any]:
         components["forward_revenue_growth"] = {"value": forward_growth, "score": score}
         weighted.append((0.5, score))
     else:
-        excluded.append("forward_revenue_growth")
+        excluded.append(
+            "forward_revenue_growth: not meaningful for a pre-revenue company"
+            if revenue_stage == "pre_revenue"
+            else "forward_revenue_growth"
+        )
 
     # recommendation mix
     recommendations = expectations.get("recommendations") if isinstance(expectations, dict) else {}
@@ -815,6 +872,8 @@ def build_qualitative_context(context: dict[str, Any]) -> dict[str, Any]:
             sources.append(compact_source)
 
     financial_snapshot = {
+        "revenue_stage": _revenue_stage(income),
+        "revenue_status": _latest_revenue_status(income),
         "revenue_growth": safe_numeric(_latest(income.get("revenue_growth"))),
         "operating_margin": (
             safe_numeric(_close_value(profitability, ["op_margin", "operating_margin"]))
@@ -835,6 +894,7 @@ def build_qualitative_context(context: dict[str, Any]) -> dict[str, Any]:
         "tailwinds": _string_list(market_review.get("growth_drivers")),
         "headwinds": _string_list(market_review.get("industry_risks")),
         "competitive_dynamics": _string_list(market_review.get("competitive_dynamics")),
+        "company_implications": _string_list(market_review.get("company_implications")),
         "regulatory_environment": market_review.get("regulatory_environment"),
         "macro_exposure": market_review.get("macro_exposure"),
         "sources": sources,
@@ -887,20 +947,27 @@ def _qualitative_evidence_available(qualitative_context: dict[str, Any], key: st
     peers = _normalise_dict(qualitative_context.get("peer_context"))
 
     if key == "risk":
-        financial_values = sum(value is not None for value in financial.values())
+        financial_values = sum(
+            financial.get(field) is not None
+            for field in ("revenue_growth", "operating_margin", "free_cash_flow", "debt_to_equity")
+        )
         return (
             financial_values >= 2
             or _has_content(company_analysis.get("key_risks"))
             or _has_content(market.get("headwinds"))
+            or _has_content(market.get("company_implications"))
         )
     if key == "market_environment":
         return any(_has_content(market.get(field)) for field in (
-            "industry_summary", "market_growth", "tailwinds", "headwinds", "competitive_dynamics",
+            "industry_summary", "market_growth", "tailwinds", "headwinds",
+            "competitive_dynamics", "company_implications",
         ))
     if key == "competitive_position":
         return (
             _has_content(peers.get("peer_names")) and _has_content(peers.get("peer_notes"))
-        ) or _has_content(company_analysis.get("key_strengths"))
+        ) or _has_content(company_analysis.get("key_strengths")) or _has_content(
+            market.get("competitive_dynamics")
+        )
     return False
 
 
@@ -920,8 +987,15 @@ def _assess_qualitative_indicators(qualitative_context: dict[str, Any]) -> dict[
     if not eligible:
         return indicators
 
+    for key in eligible:
+        indicators[key] = _qualitative_unavailable(
+            "Qualitative assessment temporarily unavailable."
+        )
+
     try:
-        response = gemini_provider.generate_qualitative_assessment(qualitative_context)
+        response = gemini_provider.generate_qualitative_assessment(
+            qualitative_context, eligible_indicators=eligible
+        )
     except Exception:
         return indicators
     if not isinstance(response, dict) or response.get("status") != "ok":
@@ -929,26 +1003,17 @@ def _assess_qualitative_indicators(qualitative_context: dict[str, Any]) -> dict[
     model_indicators = _normalise_dict(response.get("indicators"))
 
     for key in eligible:
-        item = _normalise_dict(model_indicators.get(key))
-        label = item.get("label")
-        drivers = item.get("drivers")
-        evidence = item.get("evidence")
-        if not isinstance(label, str) or label not in _QUALITATIVE_SCORE_MAP[key]:
-            continue
-        if not isinstance(drivers, list) or not 2 <= len(drivers) <= 3:
-            continue
-        if any(not isinstance(text, str) or not text.strip() for text in drivers):
-            continue
-        if not isinstance(evidence, list) or not 1 <= len(evidence) <= 4:
-            continue
-        if any(not isinstance(text, str) or not text.strip() for text in evidence):
+        item = validate_qualitative_indicator(
+            model_indicators.get(key), set(_QUALITATIVE_SCORE_MAP[key])
+        )
+        if item is None:
             continue
         indicators[key] = {
-            "label": label,
-            "score": _QUALITATIVE_SCORE_MAP[key][label],
-            "drivers": [text.strip() for text in drivers],
+            "label": item["label"],
+            "score": _QUALITATIVE_SCORE_MAP[key][item["label"]],
+            "drivers": item["drivers"],
             "components": {},
-            "evidence": [text.strip() for text in evidence],
+            "evidence": item["evidence"],
         }
     return indicators
 

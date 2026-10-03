@@ -23,14 +23,14 @@ def _valid_analysis_response():
 def _valid_bull_bear_response():
     return json.dumps({
         "bull_case": [
-            "Strong enterprise demand could support rapid cloud revenue scaling and improved operating leverage.",
-            "Higher infrastructure utilization could support margin expansion and stronger operating cash generation.",
-            "Improved execution could strengthen customer retention and support more predictable capacity growth.",
+            "Enterprise demand could support cloud growth and stronger operating leverage.",
+            "Higher infrastructure use could improve margins and strengthen operating cash flow.",
+            "Better execution could improve retention and support steadier capacity growth.",
         ],
         "bear_case": [
-            "Power-grid delays could constrain data-center expansion and slow available capacity growth.",
-            "Falling rental prices could pressure revenue growth and reduce cloud operating margins.",
-            "Heavy capital spending could prolong negative free cash flow and increase liquidity pressure.",
+            "Power delays could slow data-center expansion and constrain available capacity.",
+            "Lower rental prices could pressure revenue growth and weaken operating margins.",
+            "Heavy spending could prolong negative free cash flow and increase funding pressure.",
         ],
         "swing_factors": [
             "Speed of power approvals",
@@ -56,7 +56,7 @@ class Feature11Tests(unittest.TestCase):
     def test_bull_and_bear_word_limits_are_enforced(self):
         valid = json.loads(_valid_bull_bear_response())
         for field in ("bull_case", "bear_case"):
-            for count in (9, 17):
+            for count in (9, 15):
                 invalid = {**valid, field: [(" ".join(["word"] * count) + ".")] + valid[field][1:]}
                 with self.subTest(field=field, count=count), patch.dict(
                     os.environ, {"GOOGLE_API_KEY": "test-key"}
@@ -65,6 +65,21 @@ class Feature11Tests(unittest.TestCase):
                     return_value=json.dumps(invalid),
                 ):
                     self.assertEqual(generate_bull_bear({})["status"], "unavailable")
+
+    def test_bull_bear_character_limit_is_enforced(self):
+        valid = json.loads(_valid_bull_bear_response())
+        invalid = {
+            **valid,
+            "bull_case": [
+                "A " + "very " * 20 + "long sentence could impact business outcomes.",
+                *valid["bull_case"][1:],
+            ],
+        }
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider._request_bull_bear_model",
+            return_value=json.dumps(invalid),
+        ):
+            self.assertEqual(generate_bull_bear({})["status"], "unavailable")
 
     def test_swing_factor_word_limits_are_enforced(self):
         valid = json.loads(_valid_bull_bear_response())

@@ -3,17 +3,20 @@
 from __future__ import annotations
 
 from datetime import date
+import logging
 import re
 from typing import Any
 from urllib.parse import urlparse
 
-from . import gemini_provider, tavily_provider
+from . import cache, gemini_provider, tavily_provider
+from .assessment_scoring import is_concise_bullet
 
 
-MAX_QUERIES = 5
-MAX_EVIDENCE = 12
+MAX_QUERIES = 1
+MAX_EVIDENCE = 8
 MAX_CONTENT_CHARACTERS = 1800
 UNAVAILABLE_MESSAGE = "Market & industry review temporarily unavailable."
+LOGGER = logging.getLogger(__name__)
 
 _DESCRIPTION_MARKETS = (
     (
@@ -74,7 +77,11 @@ def build_research_focus(stock_info: dict[str, Any] | None) -> dict[str, Any]:
         return {
             "industry": "; ".join(item["market"] for item in markets[:4]),
             "value_chain": "; ".join(item["value_chain"] for item in markets[:4]),
-            "drivers": "; ".join(item["drivers"] for item in markets[:4]),
+            "drivers": (
+                "; ".join(item["drivers"] for item in markets[:4])
+                + "; customer adoption and preferences, product-market fit, "
+                "commercialization, regulatory acceptance, and demand-side barriers"
+            ),
             "markets": markets[:4],
         }
 
@@ -85,8 +92,9 @@ def build_research_focus(stock_info: dict[str, Any] | None) -> dict[str, Any]:
         "industry": subject,
         "value_chain": f"the relevant {subject} supply chain, distribution, and customers",
         "drivers": (
-            f"demand, pricing, competition, supply availability, regulation, capital needs, "
-            f"and execution in {subject}"
+            f"demand, customer adoption and preferences, product-market fit, "
+            f"commercialization, regulation, demand-side barriers, pricing, competition, "
+            f"supply availability, capital needs, and execution in {subject}"
         ),
         "description_context": description[:500],
         "markets": [{"market": subject}] if subject else [],
@@ -94,25 +102,25 @@ def build_research_focus(stock_info: dict[str, Any] | None) -> dict[str, Any]:
 
 
 def build_queries(stock_info: dict[str, Any] | None) -> list[str]:
-    """Build deterministic queries around the company's narrow economic lens."""
+    """Build one broad, deterministic query around the company's economic lens."""
     info = stock_info if isinstance(stock_info, dict) else {}
     name = _clean_text(info.get("name"))
-    ticker = _clean_text(info.get("ticker"))
+    ticker = _clean_text(info.get("ticker")).upper()
+    sector = _clean_text(info.get("sector"))
+    country = _clean_text(info.get("country"))
     focus = build_research_focus(info)
     subject = focus.get("industry", "")
     if not subject:
         return []
     year = date.today().year
-    company = name or ticker
-    value_chain = focus["value_chain"]
-    drivers = focus["drivers"]
-    return [
-        f"{subject} demand growth pricing outlook {year}",
-        f"{subject} value chain {value_chain} supply capacity {year}",
-        f"{subject} competition technology customers market share {year}",
-        f"{subject} regulation policy risks capital requirements {year}",
-        f"{company} {subject} external drivers {drivers} {year}",
-    ][:MAX_QUERIES]
+    identity = " ".join(part for part in (name, f"({ticker})" if ticker else "") if part)
+    market = " ".join(part for part in (subject, sector, country) if part)
+    query = (
+        f"{identity} {market} market outlook demand growth value chain supply "
+        f"capacity customer adoption preferences product-market fit commercialization "
+        f"competition pricing regulation policy macro risks company implications {year}"
+    )
+    return [query][:MAX_QUERIES]
 
 
 def _valid_url(value: Any) -> str | None:
@@ -168,6 +176,64 @@ def _unavailable() -> dict[str, Any]:
     return {"status": "unavailable", "message": UNAVAILABLE_MESSAGE, "review": None, "sources": []}
 
 
+def _market_cache_context(stock_info: dict[str, Any] | None, query: str) -> dict[str, Any]:
+    info = stock_info if isinstance(stock_info, dict) else {}
+    return {
+        "ticker": _clean_text(info.get("ticker")).upper(),
+        "name": _clean_text(info.get("name")),
+        "sector": _clean_text(info.get("sector")),
+        "industry": _clean_text(info.get("industry")),
+        "country": _clean_text(info.get("country")),
+        "research_focus": build_research_focus(info),
+        "query": query,
+    }
+
+
+def _validate_cached_result(value: Any) -> dict[str, Any] | None:
+    if not isinstance(value, dict) or value.get("status") != "ok":
+        return None
+    sources = value.get("sources")
+    if not isinstance(sources, list) or not sources:
+        return None
+    normalized_sources = []
+    for source in sources:
+        if not isinstance(source, dict):
+            return None
+        source_id = source.get("id")
+        title = _clean_text(source.get("title"))
+        url = _valid_url(source.get("url"))
+        content = _clean_content(source.get("content"))
+        if (
+            not isinstance(source_id, str)
+            or not re.fullmatch(r"S\d+", source_id)
+            or not title
+            or not url
+            or not content
+        ):
+            return None
+        normalized_sources.append({
+            **source,
+            "id": source_id,
+            "title": title,
+            "source": _clean_text(source.get("source"))
+            or urlparse(url).netloc.removeprefix("www."),
+            "url": url,
+            "content": content,
+        })
+    if not normalized_sources:
+        return None
+    review = _validate_review(value.get("review"), normalized_sources)
+    if review is None:
+        return None
+    used_ids = set(review["sources_used"])
+    return {
+        "status": "ok",
+        "message": None,
+        "review": review,
+        "sources": [source for source in normalized_sources if source["id"] in used_ids],
+    }
+
+
 def _validate_review(review: Any, evidence: list[dict[str, Any]]) -> dict[str, Any] | None:
     if not isinstance(review, dict):
         return None
@@ -183,7 +249,7 @@ def _validate_review(review: Any, evidence: list[dict[str, Any]]) -> dict[str, A
         values = review.get(field)
         if not isinstance(values, list) or not 3 <= len(values) <= 5:
             return None
-        if any(not isinstance(item, str) or not item.strip() for item in values):
+        if any(not is_concise_bullet(item) for item in values):
             return None
         validated[field] = [item.strip() for item in values]
     valid_ids = {item["id"] for item in evidence}
@@ -202,10 +268,20 @@ def get_market_review(stock_info: dict[str, Any] | None) -> dict[str, Any]:
     if not queries:
         return _unavailable()
 
-    raw_results: list[dict[str, Any]] = []
+    query = queries[0]
+    cache_context = _market_cache_context(stock_info, query)
+    cached = cache.read("feature-10-market-review", cache_context)
+    if cached is not None:
+        valid_cached = _validate_cached_result(cached)
+        if valid_cached is not None:
+            LOGGER.debug("Feature 10 cache hit; Tavily searches=0")
+            return valid_cached
+
+    LOGGER.debug("Feature 10 cache miss; Tavily search count=1")
     try:
-        for query in queries:
-            raw_results.extend(tavily_provider.search(query))
+        raw_results = tavily_provider.search(
+            query, max_results=tavily_provider.MAX_RESULTS_PER_QUERY, search_depth="basic"
+        )
     except Exception:
         return _unavailable()
 
@@ -231,9 +307,14 @@ def get_market_review(stock_info: dict[str, Any] | None) -> dict[str, Any]:
     if review is None:
         return _unavailable()
     source_ids = set(review["sources_used"])
-    return {
+    final_result = {
         "status": "ok",
         "message": None,
         "review": review,
         "sources": [source for source in evidence if source["id"] in source_ids],
     }
+    try:
+        cache.write("feature-10-market-review", cache_context, final_result)
+    except (OSError, TypeError, ValueError):
+        pass
+    return final_result

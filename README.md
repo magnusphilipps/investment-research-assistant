@@ -1,8 +1,8 @@
 # Investment Research Assistant
 
-A Python console application for researching publicly traded companies.
-Enter a ticker symbol, and it retrieves a price snapshot, company overview,
-and full financial statements from Yahoo Finance.
+A Python application for researching publicly traded companies, with a
+terminal interface and a minimal Streamlit foundation. Enter a ticker symbol
+to retrieve a price snapshot, company overview, and financial statements.
 
 This is a long-term learning project. Each version adds one layer of
 capability while keeping the code simple, modular, and well commented.
@@ -28,7 +28,7 @@ capability while keeping the code simple, modular, and well commented.
   - *Market Valuation:* trailing P/E, forward P/E, PEG, enterprise value, EBITDA, EV/EBITDA, price-to-book
 - **Stock Price Performance:** adjusted historical returns for 1 month, 6 months, 1 year, 3 years, and 5 years
 - **52-week range:** current adjusted price, high, low, and distance from each boundary
-- **S&P 500 comparison:** 1-year, 3-year, and 5-year stock returns versus `^GSPC` in percentage points
+- **Listing-market benchmark comparison:** 1-year, 3-year, and 5-year stock returns versus a broad local index in percentage points
 - **Recent News & Developments (Feature 8):** up to three recent English-language, company-specific Marketaux articles with source, date, concise description, and original URL
 - **Grounded AI Analysis (Feature 9):** structured Gemini synthesis of the evidence already collected by Features 1–8, with no new financial-data requests, recommendations, or target prices
 - **Bull / Bear Scenario Analysis (Feature 11):** exactly three conditional bull-case arguments, three bear-case arguments, and three key swing factors grounded in the structured company evidence and Feature 10 external review
@@ -70,7 +70,10 @@ Peer medians are calculated metric-by-metric instead of by naively using a whole
 peer set. This matters because a company may have usable peer data for revenue
 growth but a broken or economically meaningless price/earnings metric. The code
 therefore validates each peer metric individually, removes unusable values, and
-only then compares the target metric to the remaining peer median.
+only then compares the target metric to the remaining peer median. A company
+with genuinely zero revenue is identified as pre-revenue; revenue growth,
+margins, and valuation multiples that lack a meaningful base are excluded
+instead of being scored as ordinary weak performance.
 
 Valuation logic also adapts to the company profile. Profitable companies can use
 earnings-based multiples such as P/E and EV/EBITDA, while loss-making or
@@ -97,6 +100,11 @@ hidden scores follow explicit, repeatable rules over supplied metrics. The three
 new indicators require qualitative judgement across company, market-review,
 financial, and peer evidence, so the app makes one Gemini call for all three
 rather than separate calls with duplicated context and latency.
+
+Feature 12B reuses Feature 9 company analysis and Feature 10 market review
+already collected during the run; those result objects must be passed into the
+assessment context. Missing evidence leaves the affected indicator `N/A`, while
+a provider failure is reported separately from genuinely insufficient evidence.
 
 Python still validates the exact allowed labels and evidence structure, maps
 labels to hidden scores, checks that relevant evidence exists, and integrates
@@ -145,10 +153,11 @@ Type `quit` or `q` to exit.
 investment_research_assistant/
 │
 ├── run.py                          # Entry point — run this to start the app
+├── app.py                          # Minimal Streamlit report interface
 │
 ├── investment_research/            # All application code lives here
 │   ├── __init__.py                 # Marks the folder as a Python package
-│   ├── main.py                     # Application loop and user interaction
+│   ├── main.py                     # Shared report pipeline and terminal renderer
 │   ├── fetcher.py                  # Fetches price snapshot + overview via yfinance
 │   ├── financials.py               # Fetches, extracts, and calculates financial statements
 │   ├── news.py                     # Fetches and standardises Marketaux news
@@ -170,15 +179,16 @@ investment_research_assistant/
 | File | Responsibility |
 |---|---|
 | `run.py` | Single entry point. Imports `main.run()` and calls it. |
-| `investment_research/main.py` | The application loop. Reads user input, calls all modules, handles errors. |
+| `investment_research/main.py` | Builds the structured report and renders it in the terminal. |
+| `app.py` | Minimal Streamlit presentation layer; delegates all analysis to `build_report()`. |
 | `investment_research/fetcher.py` | Fetches price, market cap, and company overview from `ticker.info`. |
 | `investment_research/financials.py` | Fetches annual statements (DataFrames), extracts line items with fallback label lists, calculates margins/ratios/FCF. |
 | `investment_research/news.py` | Reads `MARKETAUX_API_KEY`, requests recent Marketaux news, standardises article metadata, and handles API failures. |
 | `investment_research/analysis.py` | Converts Feature 1–8 result dictionaries into a compact, JSON-safe AI evidence context. |
 | `investment_research/gemini_provider.py` | Calls Gemini with grounded instructions, validates structured JSON, and hides provider failures. |
-| `investment_research/tavily_provider.py` | Sends a small number of current market searches to Tavily without exposing the API key. |
-| `investment_research/market_research.py` | Builds deterministic queries, cleans and deduplicates evidence, and validates Feature 10 results. |
-| `investment_research/performance.py` | Fetches adjusted historical prices, calculates returns and the 52-week range, and compares the stock with the S&P 500. |
+| `investment_research/tavily_provider.py` | Sends a bounded Basic Search to Tavily without exposing the API key. |
+| `investment_research/market_research.py` | Builds one deterministic query, caches successful reviews, cleans source evidence, and validates Feature 10 results. |
+| `investment_research/performance.py` | Fetches adjusted historical prices, calculates returns and the 52-week range, and compares the stock with a listing-market benchmark. |
 | `investment_research/display.py` | All formatting and printing, including Feature 8 article links and URL fallbacks. |
 | `investment_research/__init__.py` | Empty marker file. Required by Python to treat the folder as an importable package. |
 
@@ -187,12 +197,16 @@ investment_research_assistant/
 ## Feature 10 — Market & Industry Review
 
 Feature 10 adds current external context without turning Gemini into an
-unbounded web-search agent. Python builds five deterministic queries from the
-company's sector, industry, and name, then Tavily retrieves the evidence.
-`market_research.py` removes incomplete results, normalizes text, deduplicates
-URLs and titles, limits content, and assigns source IDs (`S1`, `S2`, ...).
-Gemini receives only that compact evidence package plus minimal company
-metadata, and its JSON response is validated before display.
+unbounded web-search agent. Python builds one consolidated query from the
+company, industry, sector, and country; Tavily Basic Search retrieves up to
+seven results. `market_research.py` removes incomplete results, normalizes
+text, deduplicates URLs and titles, limits content, and assigns source IDs
+(`S1`, `S2`, ...). Gemini receives that source-preserving evidence package and
+minimal company metadata, and its JSON response is validated before display.
+Successful complete reviews are cached separately for 24 hours using stable
+company and research-query context. This reduces repeat API cost without
+weakening source grounding; repeated local runs normally reuse the cached
+market review.
 
 The pipeline is:
 
@@ -204,8 +218,8 @@ Source IDs and original URLs remain internal for grounding validation but are
 not displayed to the user. Gemini can only cite IDs that exist in the retrieved
 package, so it cannot invent URLs. Missing `TAVILY_API_KEY`, network failures,
 empty evidence, and Gemini failures produce a safe unavailable section while
-Features 1–9 remain visible. Five searches per company run keeps free-tier
-usage predictable.
+Features 1–9 remain visible. A cache miss uses one Basic search; repeat runs
+within the cache window use none.
 Set `TAVILY_API_KEY` in `.env`; never place the key in source code.
 
 ## Feature 11 — Bull / Bear Scenario Analysis
@@ -223,12 +237,22 @@ Feature 9's prose, and it does not run another web-search pipeline. This keeps
 the reasoning tied to observable inputs while allowing external industry
 evidence to inform company-specific mechanisms.
 
-Successful Gemini responses for Features 9 and 10 are cached locally in
-`.cache/` for approximately 24 hours. The cache key includes the complete
-input context, so changed evidence produces a new key. Failed or invalid
-responses are never cached. Temporary Gemini 503 errors are retried with
+Successful Gemini responses for Features 9 and 10 and completed Feature 10
+market reviews are cached locally in `.cache/` for approximately 24 hours.
+The market-review cache key uses stable company, research-focus, and query
+context rather than share-price data. Failed or invalid responses are never
+cached. Temporary Gemini 503 errors are retried with
 short exponential backoff; 429 quota or rate-limit errors fail immediately,
 so repeated testing does not create more quota pressure.
+
+## Feature 13A — Streamlit Foundation
+
+Streamlit is a presentation layer; investment logic stays in the backend.
+`investment_research.main.build_report(ticker)` runs the existing analysis
+pipeline once and returns its structured results. Both the terminal interface
+and Streamlit consume that report, so Features 1–12 are not reimplemented in
+the UI. Run the existing terminal app with `python run.py`, or start the
+foundation UI with `streamlit run app.py`.
 
 ## Financial Statement Formulas
 
@@ -399,13 +423,17 @@ in that window, how far the current price is below the high, and how far it is
 above the low. This reflects the actual intraday trading range rather than
 only closing prices.
 
-### S&P 500 Comparison
+### Listing-Market Benchmark Comparison
 
-The stock's 1-year, 3-year, and 5-year returns are compared with the S&P 500
-Yahoo Finance ticker `^GSPC`. The difference is shown in percentage points:
+The stock's 1-year, 3-year, and 5-year returns are compared with a broad index
+selected deterministically from Yahoo Finance listing-market metadata. US
+listings use the S&P 500 (`^GSPC`), UK listings use the FTSE 100 (`^FTSE`),
+and supported exchanges map to their corresponding local broad-market index.
+When listing data is missing or unsupported, the S&P 500 is identified
+explicitly as a fallback. The difference is shown in percentage points:
 
 ```
-Difference (pp) = Stock Return - S&P 500 Return
+Difference (pp) = Stock Return - Selected Benchmark Return
 ```
 
 Each side uses the same period. If the stock or benchmark lacks sufficient
@@ -507,7 +535,7 @@ one new concept without requiring changes to existing code.
 ### Phase 5 — Stock Price Performance ✅
 - Adjusted historical returns for 1 month, 6 months, 1 year, 3 years, and 5 years
 - 52-week high / low and current price position
-- S&P 500 benchmark comparison for 1 year, 3 years, and 5 years
+- Listing-market benchmark comparison for 1 year, 3 years, and 5 years
 
 ### Phase 6 — Watchlist (planned)
 - Save a list of tickers to a local file
@@ -572,6 +600,9 @@ This Learning Guide summarizes each feature, the main files involved, and the ke
 - Main files: `fetcher.py`, `run.py`, `main.py`.
 - Key concepts: calling library functions (`yfinance`), dictionaries, simple I/O (`input()` / `print()`).
 - Suggestion: study how `fetcher.get_stock_info()` gathers `ticker.info`.
+- Tickers need a matching provider symbol and independent company/security
+  identity evidence before the analysis pipeline starts. Sparse financial data
+  is not a reason to reject a resolved company.
 
 ## Feature 2 — Company Overview
 - What it does: Shows sector, industry, country, employees, website and a shortened business description.
@@ -592,9 +623,25 @@ This Learning Guide summarizes each feature, the main files involved, and the ke
 - Suggestion: study `get_ratios()` to see how statement-derived ratios and `yfinance`-derived valuation metrics are combined.
 
 ## Feature 5 — Stock Price Performance
-- What it does: Computes adjusted historical returns, 52-week range, and S&P 500 comparisons.
+- What it does: Computes adjusted historical returns, 52-week range, and listing-market benchmark comparisons.
 - Main files: `performance.py`, `display.py`.
 - Key concepts: working with time-series price data, handling missing history gracefully, percentage-return calculations.
+
+### Pre-Feature 13 output and evidence rules
+
+- Benchmark selection follows the actual listing market because a stock's
+  relevant performance context is local; an explicit fallback is preferable
+  to presenting a guessed local index.
+- A reported zero is retained as a real value, missing data remains
+  unavailable (`N/A`), and mathematically calculable but economically invalid
+  metrics are marked not meaningful (`N/M`) and excluded from scoring.
+- Dashboard bullets are written and validated before the Streamlit UI so
+  cards can remain concise and have consistent heights without mid-sentence
+  truncation.
+- Product adoption, customer preferences, regulatory acceptance,
+  commercialization, and demand-side barriers flow through existing Feature
+  10 research fields into the existing 12B Risk, Market Environment, and
+  Competitive Position indicators. No fourth 12B indicator is added.
 
 ## Feature 6 — Analyst Expectations & Forward Outlook
 - What it does: Shows analyst price targets, recommendation counts and revenue estimates where available.

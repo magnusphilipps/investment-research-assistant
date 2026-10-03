@@ -1,8 +1,9 @@
+import re
 import unittest
 from unittest.mock import patch
 
 from investment_research.assessment import build_stock_assessment, assess_valuation
-from investment_research.assessment_scoring import compare_to_peer
+from investment_research.assessment_scoring import compare_to_peer, is_concise_bullet
 
 
 class TestCompareToPeer(unittest.TestCase):
@@ -22,13 +23,23 @@ class TestCompareToPeer(unittest.TestCase):
         for company_value, peer_median in (
             ("invalid", 1.0),
             (1.0, "invalid"),
+            (None, 1.0),
+            (1.0, None),
             (0.0, 1.0),
             (-1.0, 1.0),
             (1.0, 0.0),
             (1.0, -1.0),
+            (float("nan"), 1.0),
+            (1.0, float("inf")),
         ):
             with self.subTest(company_value=company_value, peer_median=peer_median):
                 self.assertIsNone(compare_to_peer(company_value, peer_median))
+
+    def test_dashboard_bullets_have_hard_length_and_single_sentence_limits(self):
+        self.assertTrue(is_concise_bullet("One concise idea."))
+        self.assertFalse(is_concise_bullet("x" * 91))
+        self.assertFalse(is_concise_bullet("one two three four five six seven eight nine ten eleven twelve thirteen fourteen fifteen"))
+        self.assertFalse(is_concise_bullet("First complete idea. Second complete idea."))
 
 
 class TestFeature12A(unittest.TestCase):
@@ -85,6 +96,9 @@ class TestFeature12A(unittest.TestCase):
             self.assertIsInstance(indicator["drivers"], list)
             self.assertIn("components", indicator)
             self.assertIn("evidence", indicator)
+            for driver in indicator["drivers"]:
+                self.assertLessEqual(len(driver), 90)
+                self.assertLessEqual(len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", driver)), 14)
 
     def test_valuation_skips_negative_earnings_and_uses_sales_mode(self):
         context = {
@@ -134,6 +148,70 @@ class TestFeature12A(unittest.TestCase):
         result = build_stock_assessment(context)["indicators"]["expectations"]
         self.assertIn(result["label"], {"Positive", "Neutral"})
         self.assertIn("forward_revenue_growth", result["components"])
+
+
+class TestPreRevenueAssessment(unittest.TestCase):
+    def setUp(self):
+        self.context = {
+            "ticker": "OKLO",
+            "company": {"name": "Oklo Inc.", "sector": "Industrials"},
+            "financials": {
+                "income": {
+                    "revenue": [0.0, 0.0],
+                    "revenue_status": ["valid_zero", "valid_zero"],
+                    "revenue_stage": "pre_revenue",
+                    "revenue_growth": [None],
+                    "revenue_growth_status": ["not_meaningful"],
+                    "net_income": [-100.0, -80.0],
+                    "op_margin": [None, None],
+                    "op_margin_status": ["not_meaningful", "not_meaningful"],
+                },
+                "cashflow": {"free_cash_flow": [-150.0], "operating_cf": [-100.0]},
+            },
+            "ratios": {
+                "profitability": {"op_margin": None},
+                "strength": {"de_ratio": 0.3, "current_ratio": 4.0},
+                "valuation": {"trailing_pe": 25.0, "ev_revenue": 18.0, "price_to_sales": 20.0},
+            },
+            "peer_comparison": {"df": {
+                "EV/Revenue": [10.0, 12.0, 15.0],
+                "Price/Sales": [10.0, 15.0, 20.0],
+                "Operating Margin": [10.0, 15.0, 20.0],
+            }},
+            "analyst_expectations": {
+                "revenue_estimates": {"next_year": {"growth": 100.0}},
+                "recommendations": {"Buy": 2, "Hold": 1},
+            },
+        }
+
+    def test_pre_revenue_metrics_are_excluded_and_valuation_is_not_forced(self):
+        valuation = assess_valuation(self.context)
+        growth = build_stock_assessment(self.context)["indicators"]["growth"]
+        expectations = build_stock_assessment(self.context)["indicators"]["expectations"]
+        quality_context = {
+            **self.context,
+            "ratios": {"de_ratio": 0.3, "current_ratio": 4.0},
+        }
+        quality = build_stock_assessment(quality_context)["indicators"]["financial_quality"]
+
+        self.assertEqual(valuation["label"], "N/A")
+        self.assertIn("pre-revenue", valuation["drivers"][0].lower())
+        self.assertEqual(valuation["evidence"]["revenue_stage"], "pre_revenue")
+        self.assertEqual(growth["label"], "N/A")
+        self.assertEqual(growth["components"], {})
+        self.assertEqual(growth["evidence"]["revenue_stage"], "pre_revenue")
+        self.assertNotIn("forward_revenue_growth", expectations["components"])
+        self.assertNotIn("fcf_margin", quality["components"])
+        self.assertNotIn("operating_margin", quality["components"])
+        self.assertTrue(any("not meaningful" in item for item in quality["evidence"]["excluded_components"]))
+
+    def test_missing_revenue_is_unavailable_not_pre_revenue(self):
+        context = {
+            "financials": {"income": {"revenue": [None, None], "revenue_growth": [None]}},
+        }
+        result = build_stock_assessment(context)["indicators"]["growth"]
+        self.assertEqual(result["label"], "N/A")
+        self.assertNotIn("pre-revenue", result["drivers"][0])
 
 
 if __name__ == "__main__":

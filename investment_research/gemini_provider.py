@@ -14,6 +14,7 @@ import time
 from typing import Any
 
 from . import cache
+from .assessment_scoring import is_concise_bullet, validate_qualitative_indicator
 
 
 MODEL_NAME = "gemini-3.6-flash"
@@ -34,6 +35,12 @@ repeating every number. Highlight material strengths, weaknesses, trends, and
 tensions in the evidence. Be concise and selective, use a neutral professional
 research style, and do not provide personalized financial advice.
 
+Treat a structured pre-revenue status as distinct from ordinary low growth.
+Do not use metrics explicitly marked not_meaningful as evidence of growth or
+valuation.
+For dashboard bullets, express one idea in roughly 10–14 words and no more
+than 90 characters. Do not truncate a thought to meet the limit.
+
 Do not produce a Buy, Hold, or Sell recommendation. Do not generate an
 unsupported price target. Recent news is evidence for developments only; do
 not add sentiment scoring.
@@ -53,7 +60,7 @@ ANALYSIS_SCHEMA = {
         "recent_developments": {"type": "STRING"},
         "key_factors_to_watch": {
             "type": "ARRAY",
-            "items": {"type": "STRING"},
+            "items": {"type": "STRING", "maxLength": 90},
             "minItems": 3,
             "maxItems": 5,
         },
@@ -73,11 +80,11 @@ MARKET_REVIEW_SCHEMA = {
     "type": "OBJECT",
     "properties": {
         "industry_overview": {"type": "STRING"},
-        "growth_drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 5},
-        "competitive_dynamics": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 5},
-        "industry_risks": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 5},
+        "growth_drivers": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 5},
+        "competitive_dynamics": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 5},
+        "industry_risks": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 5},
         "market_outlook": {"type": "STRING"},
-        "company_implications": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 5},
+        "company_implications": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 5},
         "sources_used": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1},
     },
     "required": [
@@ -110,9 +117,9 @@ PEER_DISCOVERY_SCHEMA = {
 BULL_BEAR_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "bull_case": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 3},
-        "bear_case": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 3},
-        "swing_factors": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 3, "maxItems": 3},
+        "bull_case": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 3},
+        "bear_case": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 3},
+        "swing_factors": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 3},
     },
     "required": ["bull_case", "bear_case", "swing_factors"],
 }
@@ -124,7 +131,13 @@ QUALITATIVE_ASSESSMENT_SCHEMA = {
             "type": "OBJECT",
             "properties": {
                 "label": {"type": "STRING", "enum": ["Low", "Medium", "High"]},
-                "drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                "drivers": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING", "maxLength": 90},
+                    "minItems": 2,
+                    "maxItems": 3,
+                    "description": "Each driver is one sentence, at most 14 words and 90 characters.",
+                },
                 "evidence": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1, "maxItems": 4},
             },
             "required": ["label", "drivers", "evidence"],
@@ -133,7 +146,13 @@ QUALITATIVE_ASSESSMENT_SCHEMA = {
             "type": "OBJECT",
             "properties": {
                 "label": {"type": "STRING", "enum": ["Unfavourable", "Neutral", "Favourable"]},
-                "drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                "drivers": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING", "maxLength": 90},
+                    "minItems": 2,
+                    "maxItems": 3,
+                    "description": "Each driver is one sentence, at most 14 words and 90 characters.",
+                },
                 "evidence": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1, "maxItems": 4},
             },
             "required": ["label", "drivers", "evidence"],
@@ -142,7 +161,13 @@ QUALITATIVE_ASSESSMENT_SCHEMA = {
             "type": "OBJECT",
             "properties": {
                 "label": {"type": "STRING", "enum": ["Weak", "Moderate", "Strong"]},
-                "drivers": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 2, "maxItems": 3},
+                "drivers": {
+                    "type": "ARRAY",
+                    "items": {"type": "STRING", "maxLength": 90},
+                    "minItems": 2,
+                    "maxItems": 3,
+                    "description": "Each driver is one sentence, at most 14 words and 90 characters.",
+                },
                 "evidence": {"type": "ARRAY", "items": {"type": "STRING"}, "minItems": 1, "maxItems": 4},
             },
             "required": ["label", "drivers", "evidence"],
@@ -150,6 +175,49 @@ QUALITATIVE_ASSESSMENT_SCHEMA = {
     },
     "required": ["risk", "market_environment", "competitive_position"],
 }
+
+_QUALITATIVE_INSTRUCTIONS = """
+You are producing a compact qualitative stock-assessment layer from supplied
+evidence only.
+
+General rules:
+- Use only the provided context. Do not use outside knowledge.
+- Do not invent or infer unsupported facts.
+- Do not provide investment advice or Buy/Hold/Sell conclusions.
+- Do not produce an overall score, assessment, or verdict.
+- If evidence is mixed, prefer the middle label.
+- If evidence is weak, incomplete, contradictory, or insufficient, say so in
+  the evidence/drivers. Do not make a confident guess.
+- Drivers explain why a label was chosen; evidence contains specific facts or
+  observations grounded in the supplied context.
+- Every driver must be one sentence, one idea, no more than 14 words, and no
+  more than 90 characters. These are hard limits, not approximate targets.
+  Before returning JSON, count each driver's words and characters and rewrite
+  any driver that exceeds either limit. Avoid duplicate drivers and never
+  truncate a sentence to fit.
+
+RISK: Assess company-specific downside exposure, including supported evidence
+about regulatory/legal exposure, execution, customer concentration, supplier
+dependence, geographic/geopolitical exposure, business-model dependence,
+balance-sheet/funding pressure, operational vulnerabilities, or technology/
+product dependency. Low means relatively limited material company-specific
+risks in available evidence; Medium means meaningful but manageable or mixed
+risks; High means multiple significant or concentrated exposures.
+
+MARKET ENVIRONMENT: Assess the external industry/market backdrop, primarily
+from supplied market-review evidence: industry growth, demand, cyclicality,
+regulation, structural tailwinds/headwinds, macro sensitivity, and competitive
+intensity. Favourable means broadly supportive conditions; Neutral means mixed
+or balanced conditions; Unfavourable means material external headwinds dominate.
+
+COMPETITIVE POSITION: Assess relative strategic strength from supplied company
+and peer evidence: differentiation, scale, brand, switching costs, network
+effects, barriers to entry, pricing power, distribution, market position, and
+competitor/substitute pressure. Strong requires multiple durable advantages
+supported by evidence; Moderate means some advantages with material limitations
+or mixed evidence; Weak means limited differentiation or significant
+competitive disadvantage.
+""".strip()
 
 _TEXT_FIELDS = (
     "financial_performance",
@@ -165,6 +233,21 @@ _QUALITATIVE_LABELS = {
     "market_environment": {"Unfavourable", "Neutral", "Favourable"},
     "competitive_position": {"Weak", "Moderate", "Strong"},
 }
+
+_DASHBOARD_WORD_PATTERN = re.compile(r"\b[\w]+(?:[-'][\w]+)*\b")
+
+
+def _qualitative_schema(indicator_names: set[str]) -> dict[str, Any]:
+    schema = {
+        **QUALITATIVE_ASSESSMENT_SCHEMA,
+        "properties": {
+            name: QUALITATIVE_ASSESSMENT_SCHEMA["properties"][name]
+            for name in _QUALITATIVE_LABELS
+            if name in indicator_names
+        },
+        "required": [name for name in _QUALITATIVE_LABELS if name in indicator_names],
+    }
+    return schema
 
 
 def _unavailable() -> dict[str, Any]:
@@ -191,7 +274,7 @@ def _validate_analysis(value: Any) -> dict[str, Any] | None:
     factors = value.get("key_factors_to_watch")
     if not isinstance(factors, list) or not 3 <= len(factors) <= 5:
         return None
-    if any(not isinstance(factor, str) or not factor.strip() for factor in factors):
+    if any(not is_concise_bullet(factor) for factor in factors):
         return None
     analysis["key_factors_to_watch"] = [factor.strip() for factor in factors]
     return analysis
@@ -204,29 +287,9 @@ def _validate_qualitative_assessment(value: Any) -> dict[str, dict[str, Any]]:
 
     validated: dict[str, dict[str, Any]] = {}
     for name, allowed_labels in _QUALITATIVE_LABELS.items():
-        indicator = value.get(name)
-        if not isinstance(indicator, dict) or set(indicator) != {"label", "drivers", "evidence"}:
-            continue
-
-        label = indicator.get("label")
-        drivers = indicator.get("drivers")
-        evidence = indicator.get("evidence")
-        if not isinstance(label, str) or label not in allowed_labels:
-            continue
-        if not isinstance(drivers, list) or not 2 <= len(drivers) <= 3:
-            continue
-        if any(not isinstance(item, str) or not item.strip() for item in drivers):
-            continue
-        if not isinstance(evidence, list) or not 1 <= len(evidence) <= 4:
-            continue
-        if any(not isinstance(item, str) or not item.strip() for item in evidence):
-            continue
-
-        validated[name] = {
-            "label": label,
-            "drivers": [item.strip() for item in drivers],
-            "evidence": [item.strip() for item in evidence],
-        }
+        indicator = validate_qualitative_indicator(value.get(name), allowed_labels)
+        if indicator is not None:
+            validated[name] = indicator
     return validated
 
 
@@ -256,6 +319,17 @@ def _request_with_retry(request, feature_label: str) -> str | None:
     return None
 
 
+def _request_once(request, feature_label: str) -> str | None:
+    try:
+        return request()
+    except Exception as exc:
+        if _is_429(exc):
+            print(f"{feature_label}: Gemini quota or rate limit reached.")
+        else:
+            print(f"{feature_label} ERROR:", repr(exc))
+        return None
+
+
 def _request_model(context: dict[str, Any], api_key: str) -> str:
     """Call Gemini using the current official Google Python SDK."""
     from google import genai
@@ -266,7 +340,8 @@ def _request_model(context: dict[str, Any], api_key: str) -> str:
         model=MODEL_NAME,
         contents=(
             "Analyse the following structured company evidence. "
-            "Do not use outside knowledge.\n\n"
+            "Do not use outside knowledge. For key_factors_to_watch, use one "
+            "concise idea per bullet, roughly 10-14 words and at most 90 characters.\n\n"
             + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         ),
         config=types.GenerateContentConfig(
@@ -285,61 +360,57 @@ def _request_qualitative_assessment_model(context: dict[str, Any], api_key: str)
     from google import genai
     from google.genai import types
 
-    instructions = """
-You are producing a compact qualitative stock-assessment layer from supplied
-evidence only.
-
-General rules:
-- Use only the provided context. Do not use outside knowledge.
-- Do not invent or infer unsupported facts.
-- Do not provide investment advice or Buy/Hold/Sell conclusions.
-- Do not produce an overall score, assessment, or verdict.
-- If evidence is mixed, prefer the middle label.
-- If evidence is weak, incomplete, contradictory, or insufficient, say so in
-  the evidence/drivers. Do not make a confident guess.
-- Drivers explain why a label was chosen; evidence contains specific facts or
-  observations grounded in the supplied context.
-- Keep wording concise and suitable for a dashboard. Avoid duplicate drivers.
-
-RISK: Assess company-specific downside exposure, including supported evidence
-about regulatory/legal exposure, execution, customer concentration, supplier
-dependence, geographic/geopolitical exposure, business-model dependence,
-balance-sheet/funding pressure, operational vulnerabilities, or technology/
-product dependency. Low means relatively limited material company-specific
-risks in available evidence; Medium means meaningful but manageable or mixed
-risks; High means multiple significant or concentrated exposures.
-
-MARKET ENVIRONMENT: Assess the external industry/market backdrop, primarily
-from supplied market-review evidence: industry growth, demand, cyclicality,
-regulation, structural tailwinds/headwinds, macro sensitivity, and competitive
-intensity. Favourable means broadly supportive conditions; Neutral means mixed
-or balanced conditions; Unfavourable means material external headwinds dominate.
-
-COMPETITIVE POSITION: Assess relative strategic strength from supplied company
-and peer evidence: differentiation, scale, brand, switching costs, network
-effects, barriers to entry, pricing power, distribution, market position, and
-competitor/substitute pressure. Strong requires multiple durable advantages
-supported by evidence; Moderate means some advantages with material limitations
-or mixed evidence; Weak means limited differentiation or significant
-competitive disadvantage.
-
-Return exactly the three requested indicator objects and no other fields.
-""".strip()
-
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=MODEL_NAME,
         contents=(
-            "Assess the three qualitative indicators from this supplied context. "
+            "Assess all three qualitative indicators from this supplied context. "
             "Return only the required JSON structure.\n\n"
             + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
         ),
         config=types.GenerateContentConfig(
-            system_instruction=instructions,
+            system_instruction=(
+                _QUALITATIVE_INSTRUCTIONS
+                + "\n\nReturn exactly the three qualitative indicator objects "
+                "and no other fields."
+            ),
             temperature=0.2,
             max_output_tokens=4096,
             response_mime_type="application/json",
             response_schema=QUALITATIVE_ASSESSMENT_SCHEMA,
+        ),
+    )
+    return str(getattr(response, "text", "") or "")
+
+
+def _request_qualitative_recovery_model(
+    context: dict[str, Any], api_key: str, indicator_names: set[str]
+) -> str:
+    """Request only missing qualitative indicators using the same rubric."""
+    from google import genai
+    from google.genai import types
+
+    requested_names = [name for name in _QUALITATIVE_LABELS if name in indicator_names]
+    client = genai.Client(api_key=api_key)
+    response = client.models.generate_content(
+        model=MODEL_NAME,
+        contents=(
+            "Assess only these missing qualitative indicators: "
+            + ", ".join(requested_names)
+            + ". Reuse only the supplied context and return only those indicator "
+            "objects in the required JSON structure.\n\n"
+            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        ),
+        config=types.GenerateContentConfig(
+            system_instruction=(
+                _QUALITATIVE_INSTRUCTIONS
+                + "\n\nReturn only the requested indicator objects. Do not return "
+                "other indicators or additional fields."
+            ),
+            temperature=0.2,
+            max_output_tokens=4096,
+            response_mime_type="application/json",
+            response_schema=_qualitative_schema(indicator_names),
         ),
     )
     return str(getattr(response, "text", "") or "")
@@ -388,35 +459,69 @@ def generate_analysis(context: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def generate_qualitative_assessment(context: dict[str, Any]) -> dict[str, Any]:
+def generate_qualitative_assessment(
+    context: dict[str, Any], eligible_indicators: set[str] | None = None
+) -> dict[str, Any]:
     """Generate independently validated qualitative indicators from prior evidence."""
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
         return {"status": "unavailable", "indicators": {}}
 
+    eligible = (
+        set(_QUALITATIVE_LABELS)
+        if eligible_indicators is None
+        else set(eligible_indicators) & set(_QUALITATIVE_LABELS)
+    )
+    if not eligible:
+        return {"status": "ok", "indicators": {}}
+
     cached = cache.read("feature-12b", context)
     if isinstance(cached, dict) and cached.get("status") == "ok":
         cached_indicators = _validate_qualitative_assessment(cached.get("indicators"))
-        if set(cached_indicators) == set(_QUALITATIVE_LABELS):
+        if eligible <= set(cached_indicators):
             return {"status": "ok", "indicators": cached_indicators}
 
-    raw_response = _request_with_retry(
+    raw_response = _request_once(
         lambda: _request_qualitative_assessment_model(context, api_key),
         "FEATURE 12B",
     )
-    if not raw_response or not raw_response.strip():
-        return {"status": "unavailable", "indicators": {}}
+    decoded: Any = None
     try:
-        decoded = json.loads(raw_response)
+        if raw_response and raw_response.strip():
+            decoded = json.loads(raw_response)
     except (TypeError, ValueError):
-        return {"status": "unavailable", "indicators": {}}
+        decoded = None
 
     indicators = _validate_qualitative_assessment(decoded)
+    missing = eligible - set(indicators)
+    if missing:
+        recovery_response = _request_once(
+            lambda: _request_qualitative_recovery_model(
+                context, api_key, missing
+            ),
+            "FEATURE 12B recovery",
+        )
+        try:
+            recovery_decoded = (
+                json.loads(recovery_response)
+                if recovery_response and recovery_response.strip()
+                else None
+            )
+        except (TypeError, ValueError):
+            recovery_decoded = None
+        recovered = _validate_qualitative_assessment(recovery_decoded)
+        indicators.update(
+            {
+                name: value
+                for name, value in recovered.items()
+                if name in missing
+            }
+        )
+
     if not indicators:
         return {"status": "unavailable", "indicators": {}}
-
     result = {"status": "ok", "indicators": indicators}
-    if set(indicators) == set(_QUALITATIVE_LABELS):
+    if eligible <= set(indicators):
         try:
             cache.write("feature-12b", context, result)
         except (OSError, TypeError, ValueError):
@@ -439,7 +544,7 @@ def _validate_market_review(value: Any) -> dict[str, Any] | None:
         items = value.get(field)
         if not isinstance(items, list) or not 3 <= len(items) <= 5:
             return None
-        if any(not isinstance(item, str) or not item.strip() for item in items):
+        if any(not is_concise_bullet(item) for item in items):
             return None
         result[field] = [item.strip() for item in items]
     sources = value.get("sources_used")
@@ -490,6 +595,11 @@ def _request_market_model(context: dict[str, Any], api_key: str) -> str:
             "Produce a market and industry review from the supplied evidence. "
             "Use only evidence content and company metadata provided here. "
             "Use the supplied research_focus as the primary economic lens. "
+            "Where evidence exists, cover customer adoption and preferences, "
+            "regulatory acceptance, commercialization, product-market fit, and "
+            "demand-side barriers. Do not infer these without evidence. "
+            "Keep each dashboard list item to one idea, roughly 10-14 words "
+            "and at most 90 characters; narrative fields may be longer. "
             "Prefer the narrowest meaningful industry and relevant value chain; "
             "do not fall back to broad sector commentary when the focus is available. "
             "Use evidence IDs such as S1 in sources_used; never invent URLs or IDs. "
@@ -518,7 +628,10 @@ def _request_market_model(context: dict[str, Any], api_key: str) -> str:
                 "combine or average materially incompatible market-size estimates; omit "
                 "precise figures when they cannot be reconciled. Prioritize evidence that "
                 "could affect demand, growth, margins, pricing, competition, market share, "
-                "supply, capital needs, regulation, or execution. Do not put source IDs, "
+                "customer adoption, preferences, product-market fit, commercialization, "
+                "demand-side barriers, supply, capital needs, regulatory acceptance, or "
+                "execution. Keep dashboard list items concise, at most 90 characters, "
+                "and grounded in one idea. Do not put source IDs, "
                 "URLs, source names, or citation markers in narrative fields. Return only "
                 "the requested JSON structure."
             ),
@@ -670,7 +783,8 @@ def _validate_bull_bear(value: Any) -> dict[str, list[str]] | None:
         if any(
             not isinstance(item, str)
             or not item.strip()
-            or not 10 <= len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", item)) <= 16
+            or not 10 <= len(_DASHBOARD_WORD_PATTERN.findall(item)) <= 14
+            or len(item.strip()) > 90
             or len(re.findall(r"[.!?]", item)) != 1
             or item.rstrip()[-1] not in ".!?"
             for item in items
@@ -684,6 +798,7 @@ def _validate_bull_bear(value: Any) -> dict[str, list[str]] | None:
         not isinstance(item, str)
         or not item.strip()
         or not 4 <= len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", item)) <= 10
+        or len(item.strip()) > 90
         or re.search(r"[.!?]", item)
         for item in items
     ):
@@ -702,7 +817,8 @@ def _request_bull_bear_model(context: dict[str, Any], api_key: str) -> str:
         contents=(
             "Create exactly three conditional bull-case arguments, three conditional "
             "bear-case arguments, and three concise swing factors from ONLY this evidence. "
-            "Bull and bear items must be exactly one sentence and 10-16 words, using "
+            "Bull and bear items must be exactly one sentence and 10-14 words, "
+            "no more than 90 characters, using "
             "one clear evidence -> business mechanism -> potential implication. "
             "Swing factors must be 4-10 words, phrased only as variables to monitor. "
             "Do not use analyst forecasts or metrics as the mechanism itself; use the "

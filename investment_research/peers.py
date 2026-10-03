@@ -14,6 +14,7 @@ remains in display.py and calculations remain in financials.py.
 from __future__ import annotations
 
 import math
+import re
 from typing import List, Dict, Any
 
 import pandas as pd
@@ -45,16 +46,18 @@ def _normalise_ticker(value: Any) -> str | None:
     if value is None:
         return None
     ticker = str(value).strip().upper()
-    return ticker if ticker else None
+    return ticker if re.fullmatch(r"[A-Z0-9][A-Z0-9.^=-]{0,19}", ticker) else None
 
 
 def _ticker_exists(ticker: str) -> bool:
     """Check whether a ticker resolves with the existing provider data."""
     try:
         info = (yf.Ticker(ticker).info or {})
-    except Exception:
-        return False
-    return bool(info.get("symbol") or info.get("shortName") or info.get("longName"))
+    except Exception as error:
+        if fetcher.is_not_found_error(error):
+            return False
+        raise
+    return isinstance(info, dict) and fetcher.is_resolved_security(ticker, info)
 
 
 def _is_valid_metric_value(value: Any, *, metric_name: str | None = None) -> bool:
@@ -67,7 +70,7 @@ def _is_valid_metric_value(value: Any, *, metric_name: str | None = None) -> boo
         return False
     if not math.isfinite(numeric):
         return False
-    if metric_name in {"P/E", "Forward P/E", "EV/EBITDA"} and numeric < 0:
+    if metric_name in {"P/E", "Forward P/E", "EV/EBITDA"} and numeric <= 0:
         return False
     return True
 
@@ -274,7 +277,7 @@ def fetch_peer_comparison(ticker: str) -> Dict[str, Any]:
             roe = prof.get("roe")
             de_ratio = strength.get("de_ratio")
             # trailing/forward P/E and EV/EBITDA come from valuation.
-            # Negative valuation multiples are not economically meaningful for
+            # Non-positive valuation multiples are not economically meaningful for
             # this peer-comparison display, so we treat them as unavailable.
             trailing_pe = val.get("trailing_pe")
             forward_pe = val.get("forward_pe")
@@ -290,7 +293,7 @@ def fetch_peer_comparison(ticker: str) -> Dict[str, Any]:
                     numeric = float(value)
                 except (TypeError, ValueError):
                     continue
-                if not math.isfinite(numeric) or numeric < 0:
+                if not math.isfinite(numeric) or numeric <= 0:
                     if metric_name == "P/E":
                         trailing_pe = None
                     elif metric_name == "Forward P/E":
@@ -364,7 +367,7 @@ def _build_factual_summary(target: str, df: pd.DataFrame) -> List[str]:
                 continue
             if not math.isfinite(numeric):
                 continue
-            if metric in {"P/E", "Forward P/E", "EV/EBITDA"} and numeric < 0:
+            if metric in {"P/E", "Forward P/E", "EV/EBITDA"} and numeric <= 0:
                 continue
             usable.append((peer, numeric))
         return usable

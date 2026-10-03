@@ -361,12 +361,12 @@ def print_analyst_expectations(expectations: dict) -> None:
     print(f"  Current Year Revenue              {format_financial_value(cy_rev)}")
     # growth displayed as percent when available
     g = cy.get('growth')
-    print(f"  Expected Growth                    {format_pct_fraction(g)}")
+    print(f"  Expected Growth                    {_format_with_metric_status(cy.get('growth_status'), format_pct_fraction(g))}")
     print()
     ny_rev = ny.get('revenue')
     print(f"  Next Year Revenue                 {format_financial_value(ny_rev)}")
     g2 = ny.get('growth')
-    print(f"  Expected Growth                    {format_pct_fraction(g2)}")
+    print(f"  Expected Growth                    {_format_with_metric_status(ny.get('growth_status'), format_pct_fraction(g2))}")
 
     print(sep)
 
@@ -539,6 +539,13 @@ def format_growth(value: float | None) -> str:
     return f"{sign}{abs(float(value)):.1f}%"
 
 
+def _format_with_metric_status(status: str | None, formatted: str) -> str:
+    """Distinguish economically invalid metrics from unavailable values."""
+    if status == "not_meaningful":
+        return "N/M"
+    return formatted
+
+
 def format_margin_change(value: float | None) -> str:
     """
     Format a year-on-year margin change in percentage points (pp).
@@ -702,15 +709,20 @@ def print_income_statement(fin: dict) -> None:
     # The oldest available year has no prior year to compare, so it
     # shows "N/A".  We fill from revenue_growth, padding with None.
     rg = inc.get("revenue_growth", [])
+    rg_status = inc.get("revenue_growth_status", [])
     growth_cells = []
     for i in range(n):
-        growth_cells.append(format_growth(rg[i]) if i < len(rg) else "N/A")
+        value = rg[i] if i < len(rg) else None
+        status = rg_status[i] if i < len(rg_status) else None
+        growth_cells.append(_format_with_metric_status(status, format_growth(value)))
     print(_table_row("  Revenue Growth", growth_cells))
 
     # Revenue Growth Trend spans all columns — it is a single conclusion
     # about the direction of growth, not a per-year value.
     accel = inc.get("acceleration", "Unavailable")
     print(f"  {'  Revenue Growth Trend':<{_LABEL_WIDTH}}  {accel}")
+    if inc.get("revenue_stage") == "pre_revenue":
+        print(f"  {'  Revenue Stage':<{_LABEL_WIDTH}}  Pre-revenue")
     print(sep)
 
     # ---- YoY margin changes (computed once, used in table + summary) ----
@@ -719,6 +731,8 @@ def print_income_statement(fin: dict) -> None:
     # can be reused in the summary sentence below the table.
     gm_list = inc.get("gross_margin", [])
     om_list = inc.get("op_margin",    [])
+    gm_status = inc.get("gross_margin_status", [])
+    om_status = inc.get("op_margin_status", [])
 
     yoy_gm = (
         gm_list[0] - gm_list[1]
@@ -737,7 +751,13 @@ def print_income_statement(fin: dict) -> None:
     ]
     print(_table_row("Gross Profit", gp_cells))
 
-    gm_cells = [format_percent(gm_list[i]) for i in range(n)]
+    gm_cells = [
+        _format_with_metric_status(
+            gm_status[i] if i < len(gm_status) else None,
+            format_percent(gm_list[i]),
+        )
+        for i in range(n)
+    ]
     print(_table_row("  Gross Margin", gm_cells))
 
     # YoY change: only the most recent year has a comparison period,
@@ -752,7 +772,13 @@ def print_income_statement(fin: dict) -> None:
     ]
     print(_table_row("Operating Income", op_cells))
 
-    om_cells = [format_percent(om_list[i]) for i in range(n)]
+    om_cells = [
+        _format_with_metric_status(
+            om_status[i] if i < len(om_status) else None,
+            format_percent(om_list[i]),
+        )
+        for i in range(n)
+    ]
     print(_table_row("  Operating Margin", om_cells))
 
     om_yoy_cells = [format_margin_change(yoy_om)] + [""] * (n - 1)
@@ -1071,12 +1097,16 @@ def print_ratios(ratios: dict, fin: dict) -> None:
     )
     _ratio_line(
         "Net Margin",
-        format_percent(prof.get("net_margin")),
+        _format_with_metric_status(
+            prof.get("net_margin_status"), format_percent(prof.get("net_margin")),
+        ),
         "Percentage of revenue that becomes profit after all expenses.",
     )
     _ratio_line(
         "Operating Margin",
-        format_percent(prof.get("op_margin")),
+        _format_with_metric_status(
+            prof.get("op_margin_status"), format_percent(prof.get("op_margin")),
+        ),
         "Percentage of revenue remaining after operating expenses.",
     )
     _ratio_line(
@@ -1146,17 +1176,26 @@ def print_ratios(ratios: dict, fin: dict) -> None:
 
     _ratio_line(
         "Trailing P/E",
-        f"{trailing_pe:.1f}x" if trailing_pe is not None else "N/A",
+        _format_with_metric_status(
+            val.get("trailing_pe_status"),
+            f"{trailing_pe:.1f}x" if trailing_pe is not None else "N/A",
+        ),
         "How much investors pay for each dollar of earnings.",
     )
     _ratio_line(
         "Forward P/E",
-        f"{forward_pe:.1f}x" if forward_pe is not None else "N/A",
+        _format_with_metric_status(
+            val.get("forward_pe_status"),
+            f"{forward_pe:.1f}x" if forward_pe is not None else "N/A",
+        ),
         "Values the company using expected future earnings.",
     )
     _ratio_line(
         "PEG Ratio",
-        f"{peg:.2f}x" if peg is not None else "N/A",
+        _format_with_metric_status(
+            val.get("peg_status"),
+            f"{peg:.2f}x" if peg is not None else "N/A",
+        ),
         "Adjusts the P/E ratio for expected earnings growth.",
     )
     _ratio_line(
@@ -1171,12 +1210,18 @@ def print_ratios(ratios: dict, fin: dict) -> None:
     )
     _ratio_line(
         "EV / EBITDA",
-        f"{ev_ebitda:.1f}x" if ev_ebitda is not None else "N/A",
+        _format_with_metric_status(
+            val.get("ev_ebitda_status"),
+            f"{ev_ebitda:.1f}x" if ev_ebitda is not None else "N/A",
+        ),
         "Compares enterprise value with operating earnings.",
     )
     _ratio_line(
         "Price-to-Book (P/B)",
-        f"{pb:.2f}x" if pb is not None else "N/A",
+        _format_with_metric_status(
+            val.get("pb_status"),
+            f"{pb:.2f}x" if pb is not None else "N/A",
+        ),
         "Compares market value with accounting book value.",
     )
 
@@ -1209,11 +1254,12 @@ def format_percentage_points(value: float | None) -> str:
 
 
 def print_performance(performance: dict) -> None:
-    """Print historical returns, the 52-week range, and S&P 500 comparison."""
+    """Print historical returns, the 52-week range, and selected benchmark comparison."""
     separator = "-" * 58
     returns = performance.get("returns", {})
     price_range = performance.get("range", {})
     benchmark = performance.get("benchmark", {})
+    benchmark_name = str(performance.get("benchmark_name") or "S&P 500 (fallback)")
 
     print()
     print(f"  {separator}")
@@ -1232,9 +1278,9 @@ def print_performance(performance: dict) -> None:
     print(f"  {'Above 52-Week Low':<24}{format_distance(price_range.get('above_low')):>14}")
 
     print()
-    print("  VS S&P 500")
+    print(f"  VS {benchmark_name}")
     print(f"  {separator}")
-    print(f"  {'':<16}{'Stock':>14}{'S&P 500':>14}{'Difference':>14}")
+    print(f"  {'':<16}{'Stock':>14}{benchmark_name:>22}{'Difference':>14}")
     for label in ("1 Year", "3 Years", "5 Years"):
         values = benchmark.get(label, {})
         print(
@@ -1259,9 +1305,10 @@ def _performance_summary(performance: dict) -> str:
 
     if one_year is not None and difference is not None:
         direction = "outperformed" if difference >= 0 else "underperformed"
+        benchmark_name = performance.get("benchmark_name") or "the selected benchmark"
         return (
             f"The stock returned {format_return(one_year)} over the past year and "
-            f"{direction} the S&P 500 by {abs(difference) * 100:.1f} percentage points."
+            f"{direction} {benchmark_name} by {abs(difference) * 100:.1f} percentage points."
         )
     if one_year is not None:
         return f"The stock returned {format_return(one_year)} over the past year."

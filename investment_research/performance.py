@@ -20,6 +20,79 @@ PERFORMANCE_PERIODS = {
     "5 Years": pd.DateOffset(years=5),
 }
 
+_BENCHMARKS_BY_EXCHANGE = {
+    "ASE": ("^GSPC", "S&P 500"),
+    "NASDAQ": ("^GSPC", "S&P 500"),
+    "NASDAQGS": ("^GSPC", "S&P 500"),
+    "NASDAQGM": ("^GSPC", "S&P 500"),
+    "NASDAQCM": ("^GSPC", "S&P 500"),
+    "NCM": ("^GSPC", "S&P 500"),
+    "NGM": ("^GSPC", "S&P 500"),
+    "NMS": ("^GSPC", "S&P 500"),
+    "NAS": ("^GSPC", "S&P 500"),
+    "NYQ": ("^GSPC", "S&P 500"),
+    "NYSE": ("^GSPC", "S&P 500"),
+    "NEWYORKSTOCKEXCHANGE": ("^GSPC", "S&P 500"),
+    "NYSEARCA": ("^GSPC", "S&P 500"),
+    "NYSEAMERICAN": ("^GSPC", "S&P 500"),
+    "PCX": ("^GSPC", "S&P 500"),
+    "LSE": ("^FTSE", "FTSE 100"),
+    "XLON": ("^FTSE", "FTSE 100"),
+    "LONDONSTOCKEXCHANGE": ("^FTSE", "FTSE 100"),
+    "JPX": ("^N225", "Nikkei 225"),
+    "TYO": ("^N225", "Nikkei 225"),
+    "HKG": ("^HSI", "Hang Seng Index"),
+    "HONGKONGSTOCKEXCHANGE": ("^HSI", "Hang Seng Index"),
+    "TOR": ("^GSPTSE", "S&P/TSX Composite"),
+    "TSX": ("^GSPTSE", "S&P/TSX Composite"),
+    "TORONTOSTOCKEXCHANGE": ("^GSPTSE", "S&P/TSX Composite"),
+    "ASX": ("^AXJO", "S&P/ASX 200"),
+    "GER": ("^GDAXI", "DAX"),
+    "XETRA": ("^GDAXI", "DAX"),
+    "FRANKFURTSTOCKEXCHANGE": ("^GDAXI", "DAX"),
+    "PAR": ("^FCHI", "CAC 40"),
+    "AMS": ("^AEX", "AEX"),
+    "MIL": ("FTSEMIB.MI", "FTSE MIB"),
+    "STO": ("^OMX", "OMX Stockholm 30"),
+    "SWX": ("^SSMI", "SMI"),
+    "SIX": ("^SSMI", "SMI"),
+    "NSE": ("^NSEI", "NIFTY 50"),
+    "BSE": ("^BSESN", "BSE SENSEX"),
+    "KSC": ("^KS11", "KOSPI"),
+    "KOE": ("^KQ11", "KOSDAQ"),
+    "SES": ("^STI", "Straits Times Index"),
+}
+
+_BENCHMARKS_BY_MARKET = {
+    "US_MARKET": ("^GSPC", "S&P 500"),
+    "GB_MARKET": ("^FTSE", "FTSE 100"),
+    "JP_MARKET": ("^N225", "Nikkei 225"),
+    "HK_MARKET": ("^HSI", "Hang Seng Index"),
+    "CA_MARKET": ("^GSPTSE", "S&P/TSX Composite"),
+    "AU_MARKET": ("^AXJO", "S&P/ASX 200"),
+    "DE_MARKET": ("^GDAXI", "DAX"),
+    "FR_MARKET": ("^FCHI", "CAC 40"),
+    "IN_MARKET": ("^NSEI", "NIFTY 50"),
+    "CH_MARKET": ("^SSMI", "SMI"),
+    "KR_MARKET": ("^KS11", "KOSPI"),
+    "SG_MARKET": ("^STI", "Straits Times Index"),
+}
+
+
+def _benchmark_for_listing(
+    exchange: str | None,
+    market: str | None,
+) -> tuple[str, str, str]:
+    """Choose a broad local index, falling back explicitly when listing data is absent."""
+    exchange_key = "".join(character for character in str(exchange or "").upper() if character.isalnum())
+    market_key = str(market or "").strip().upper()
+    benchmark = _BENCHMARKS_BY_EXCHANGE.get(exchange_key)
+    if benchmark is None:
+        benchmark = _BENCHMARKS_BY_MARKET.get(market_key)
+    if benchmark is not None:
+        return (*benchmark, "listing_market")
+    return "^GSPC", "S&P 500 (fallback)", "fallback"
+
 
 def _clean_history(history: pd.DataFrame) -> pd.DataFrame:
     """Return clean adjusted close, close, high, and low price columns."""
@@ -184,13 +257,18 @@ def _history_for_ticker(ticker_symbol: str) -> pd.DataFrame:
     return cleaned
 
 
-def get_performance(ticker_symbol: str) -> dict | None:
-    """Retrieve stock and S&P 500 performance for a ticker.
+def get_performance(
+    ticker_symbol: str,
+    exchange: str | None = None,
+    market: str | None = None,
+) -> dict | None:
+    """Retrieve stock performance against a broad benchmark for its listing market.
 
     The stock history is required for a result.  The benchmark is optional:
     a Yahoo Finance benchmark failure leaves the stock section available and
     marks benchmark values as unavailable.
     """
+    benchmark_symbol, benchmark_name, benchmark_source = _benchmark_for_listing(exchange, market)
     stock_history = _history_for_ticker(ticker_symbol)
     if stock_history.empty:
         return None
@@ -203,7 +281,7 @@ def get_performance(ticker_symbol: str) -> dict | None:
     }
 
     try:
-        benchmark_history = _history_for_ticker("^GSPC")
+        benchmark_history = _history_for_ticker(benchmark_symbol)
     except Exception:
         benchmark_history = pd.DataFrame()
     benchmark_prices = (
@@ -244,6 +322,9 @@ def get_performance(ticker_symbol: str) -> dict | None:
         "max_drawdown": _max_drawdown(stock_prices),
         "range": _calculate_52_week_range(stock_history),
         "benchmark": comparison,
+        "benchmark_symbol": benchmark_symbol,
+        "benchmark_name": benchmark_name,
+        "benchmark_source": benchmark_source,
         "latest_date": stock_history.index[-1].date().isoformat(),
         "retrieved_at": datetime.now().isoformat(timespec="seconds"),
     }

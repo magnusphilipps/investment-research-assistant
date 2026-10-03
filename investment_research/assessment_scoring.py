@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from statistics import median
 from typing import Any, Iterable
 
@@ -24,6 +25,46 @@ def safe_numeric(value: Any) -> float | None:
     if not math.isfinite(numeric):
         return None
     return numeric
+
+
+def is_concise_bullet(value: Any) -> bool:
+    """Validate the practical character and word ceilings for dashboard bullets."""
+    if not isinstance(value, str) or not value.strip():
+        return False
+    text = value.strip()
+    return (
+        len(text) <= 90
+        and len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", text)) <= 14
+        and len(re.findall(r"[.!?](?=\s|$)", text)) <= 1
+    )
+
+
+def validate_qualitative_indicator(
+    value: Any, allowed_labels: set[str]
+) -> dict[str, Any] | None:
+    """Validate and normalize one qualitative indicator against the shared contract."""
+    if not isinstance(value, dict) or set(value) != {"label", "drivers", "evidence"}:
+        return None
+
+    label = value.get("label")
+    drivers = value.get("drivers")
+    evidence = value.get("evidence")
+    if not isinstance(label, str) or label not in allowed_labels:
+        return None
+    if not isinstance(drivers, list) or not 2 <= len(drivers) <= 3:
+        return None
+    if any(not is_concise_bullet(driver) for driver in drivers):
+        return None
+    if not isinstance(evidence, list) or not 1 <= len(evidence) <= 4:
+        return None
+    if any(not isinstance(item, str) or not item.strip() for item in evidence):
+        return None
+
+    return {
+        "label": label,
+        "drivers": [driver.strip() for driver in drivers],
+        "evidence": [item.strip() for item in evidence],
+    }
 
 
 def valid_metric_values(values: Any, *, metric_name: str | None = None) -> list[float]:

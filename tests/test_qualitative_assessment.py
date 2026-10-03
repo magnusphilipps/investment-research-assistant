@@ -76,6 +76,9 @@ def _assessment_context():
                 "growth_drivers": ["Cloud adoption supports demand."],
                 "industry_risks": ["Competition may pressure pricing."],
                 "competitive_dynamics": ["Competition remains active."],
+                "company_implications": [
+                    "Demand may change.", "Execution matters.", "Competition matters.",
+                ],
             },
             "sources": [{"id": "S1", "title": "Industry overview", "content": "Supplied market evidence."}],
         },
@@ -83,6 +86,222 @@ def _assessment_context():
 
 
 class TestFeature12B(unittest.TestCase):
+    def test_raw_model_response_with_three_compliant_indicators_survives_both_validation_stages(self):
+        raw_response = json.dumps(_valid_indicators())
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=raw_response,
+        ) as model_request, patch(
+            "investment_research.gemini_provider.cache.write"
+        ):
+            result = assessment.build_stock_assessment(_assessment_context())
+
+        model_request.assert_called_once()
+        self.assertEqual(
+            {
+                key: result["indicators"][key]["label"]
+                for key in ("risk", "market_environment", "competitive_position")
+            },
+            {
+                "risk": "Medium",
+                "market_environment": "Favourable",
+                "competitive_position": "Strong",
+            },
+        )
+
+    def test_all_valid_indicators_do_not_trigger_recovery(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=json.dumps(_valid_indicators()),
+        ) as primary, patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model"
+        ) as recovery, patch("investment_research.gemini_provider.cache.write"):
+            result = generate_qualitative_assessment(_assessment_context())
+
+        primary.assert_called_once()
+        recovery.assert_not_called()
+        self.assertEqual(set(result["indicators"]), set(_valid_indicators()))
+
+    def test_one_rejected_eligible_indicator_is_recovered_and_merged(self):
+        primary_indicators = _valid_indicators()
+        primary_indicators["competitive_position"]["drivers"][0] = (
+            "A too long driver includes claims, details, and clauses beyond the required concise length."
+        )
+        recovered_indicator = {
+            "competitive_position": _valid_indicators()["competitive_position"],
+        }
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=json.dumps(primary_indicators),
+        ) as primary, patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value=json.dumps(recovered_indicator),
+        ) as recovery, patch("investment_research.gemini_provider.cache.write") as cache_write:
+            result = generate_qualitative_assessment(_assessment_context())
+
+        primary.assert_called_once_with(_assessment_context(), "test-key")
+        recovery.assert_called_once_with(
+            _assessment_context(), "test-key", {"competitive_position"}
+        )
+        self.assertEqual(set(result["indicators"]), set(_valid_indicators()))
+        self.assertEqual(
+            result["indicators"]["competitive_position"]["label"],
+            "Strong",
+        )
+        cache_write.assert_called_once_with(
+            "feature-12b",
+            _assessment_context(),
+            {"status": "ok", "indicators": result["indicators"]},
+        )
+
+    def test_two_rejected_eligible_indicators_share_one_recovery_request(self):
+        eligible = {"risk", "competitive_position"}
+        primary_indicators = {
+            "risk": _valid_indicators()["risk"],
+            "competitive_position": _valid_indicators()["competitive_position"],
+        }
+        primary_indicators["risk"]["label"] = "Very High"
+        primary_indicators["competitive_position"]["evidence"] = []
+        recovered = {
+            "risk": _valid_indicators()["risk"],
+            "competitive_position": _valid_indicators()["competitive_position"],
+        }
+        context = _assessment_context()
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=json.dumps(primary_indicators),
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value=json.dumps(recovered),
+        ) as recovery, patch("investment_research.gemini_provider.cache.write"):
+            result = generate_qualitative_assessment(
+                context, eligible_indicators=eligible
+            )
+
+        recovery.assert_called_once_with(context, "test-key", eligible)
+        self.assertEqual(set(result["indicators"]), eligible)
+
+    def test_malformed_recovery_keeps_valid_primary_indicator_and_is_not_retried(self):
+        primary = {
+            "risk": _valid_indicators()["risk"],
+            "competitive_position": {"label": "Strong", "drivers": [], "evidence": []},
+        }
+        context = _assessment_context()
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=json.dumps(primary),
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value=json.dumps({
+                "competitive_position": {
+                    "label": "Strong",
+                    "drivers": ["Only one driver."],
+                    "evidence": ["Peer comparison supports the claim."],
+                },
+            }),
+        ) as recovery, patch("investment_research.gemini_provider.cache.write") as cache_write:
+            result = generate_qualitative_assessment(
+                context,
+                eligible_indicators={"risk", "competitive_position"},
+            )
+
+        recovery.assert_called_once()
+        self.assertEqual(set(result["indicators"]), {"risk"})
+        self.assertEqual(result["indicators"]["risk"]["label"], "Medium")
+        cache_write.assert_not_called()
+
+    def test_primary_and_recovery_each_make_at_most_one_request(self):
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            side_effect=RuntimeError("503 service unavailable"),
+        ) as primary, patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value=json.dumps(_valid_indicators()),
+        ) as recovery, patch("investment_research.gemini_provider.cache.write"):
+            result = generate_qualitative_assessment(_assessment_context())
+
+        primary.assert_called_once_with(_assessment_context(), "test-key")
+        recovery.assert_called_once_with(
+            _assessment_context(),
+            "test-key",
+            {"risk", "market_environment", "competitive_position"},
+        )
+        self.assertEqual(set(result["indicators"]), set(_valid_indicators()))
+
+    def test_recovery_never_requests_indicator_without_eligible_evidence(self):
+        context = _assessment_context()
+        context["market_review"] = {"status": "unavailable", "review": None}
+        primary = {
+            "risk": _valid_indicators()["risk"],
+            "competitive_position": _valid_indicators()["competitive_position"],
+        }
+        primary["competitive_position"]["drivers"] = ["Too few drivers."]
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=json.dumps(primary),
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value=json.dumps({
+                "competitive_position": _valid_indicators()["competitive_position"],
+            }),
+        ) as recovery, patch("investment_research.gemini_provider.cache.write"):
+            result = assessment.build_stock_assessment(context)
+
+        recovery.assert_called_once()
+        self.assertNotIn("market_environment", recovery.call_args.args[2])
+        self.assertEqual(result["indicators"]["market_environment"]["label"], "N/A")
+        self.assertEqual(result["indicators"]["competitive_position"]["label"], "Strong")
+
+    def test_malformed_raw_indicator_stays_na_without_rejecting_its_peers(self):
+        malformed_responses = (
+            ("risk", lambda item: item["drivers"].__setitem__(
+                0, "Risk from debt, execution, legal, funding, suppliers, customers, tech, ops, concentration may all increase further."
+            )),
+            ("market_environment", lambda item: item.__setitem__("label", "Very Favourable")),
+            ("competitive_position", lambda item: item.__setitem__("evidence", [" "])),
+        )
+        for malformed_key, corrupt in malformed_responses:
+            with self.subTest(indicator=malformed_key):
+                raw_indicators = _valid_indicators()
+                corrupt(raw_indicators[malformed_key])
+                with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+                    "investment_research.gemini_provider.cache.read", return_value=None
+                ), patch(
+                    "investment_research.gemini_provider._request_qualitative_assessment_model",
+                    return_value=json.dumps(raw_indicators),
+                ), patch(
+                    "investment_research.gemini_provider._request_qualitative_recovery_model",
+                    return_value="{}",
+                ), patch("investment_research.gemini_provider.cache.write"):
+                    result = assessment.build_stock_assessment(_assessment_context())
+
+                for key in ("risk", "market_environment", "competitive_position"):
+                    if key == malformed_key:
+                        self.assertEqual(result["indicators"][key]["label"], "N/A")
+                        self.assertEqual(
+                            result["indicators"][key]["drivers"],
+                            ["Qualitative assessment temporarily unavailable."],
+                        )
+                    else:
+                        self.assertEqual(
+                            result["indicators"][key]["label"],
+                            _valid_indicators()[key]["label"],
+                        )
+
     def test_valid_response_maps_all_hidden_scores_and_merges_eight_indicators(self):
         model_indicators = _valid_indicators()
         with patch(
@@ -126,6 +345,9 @@ class TestFeature12B(unittest.TestCase):
         ), patch(
             "investment_research.gemini_provider._request_qualitative_assessment_model",
             return_value=json.dumps(invalid),
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value="{}",
         ), patch("investment_research.gemini_provider.cache.write") as cache_write:
             result = generate_qualitative_assessment(_assessment_context())
 
@@ -144,10 +366,29 @@ class TestFeature12B(unittest.TestCase):
                 ), patch(
                     "investment_research.gemini_provider._request_qualitative_assessment_model",
                     return_value=json.dumps(invalid),
+                ), patch(
+                    "investment_research.gemini_provider._request_qualitative_recovery_model",
+                    return_value="{}",
                 ):
                     result = generate_qualitative_assessment(_assessment_context())
                 self.assertNotIn("market_environment", result["indicators"])
                 self.assertIn("risk", result["indicators"])
+
+    def test_overlong_driver_rejects_only_affected_indicator(self):
+        invalid = _valid_indicators()
+        invalid["risk"]["drivers"][0] = "A " + "very " * 20 + "long risk driver."
+        with patch.dict(os.environ, {"GOOGLE_API_KEY": "test-key"}), patch(
+            "investment_research.gemini_provider.cache.read", return_value=None
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_assessment_model",
+            return_value=json.dumps(invalid),
+        ), patch(
+            "investment_research.gemini_provider._request_qualitative_recovery_model",
+            return_value="{}",
+        ):
+            result = generate_qualitative_assessment(_assessment_context())
+        self.assertNotIn("risk", result["indicators"])
+        self.assertIn("market_environment", result["indicators"])
 
     def test_unavailable_gemini_leaves_12a_available_and_12b_na(self):
         with patch.dict(os.environ, {}, clear=True), patch(
@@ -175,6 +416,109 @@ class TestFeature12B(unittest.TestCase):
         for key in ("risk", "market_environment", "competitive_position"):
             self.assertEqual(result["indicators"][key]["label"], "N/A")
         generate.assert_not_called()
+
+    def test_eligible_evidence_with_provider_unavailable_is_not_mislabeled_insufficient(self):
+        context = {
+            "company": {"name": "Example Corp", "sector": "Energy"},
+            "company_analysis": {
+                "analysis": {
+                    "key_factors_to_watch": [
+                        "Regulatory approvals affect deployment timing.",
+                        "Capital spending precedes commercial operations.",
+                    ],
+                    "peer_positioning": "Available peer evidence provides competitive context.",
+                },
+            },
+        }
+        with patch(
+            "investment_research.assessment.gemini_provider.generate_qualitative_assessment",
+            return_value={"status": "unavailable", "indicators": {}},
+        ) as generate:
+            result = assessment.build_stock_assessment(context)
+
+        generate.assert_called_once()
+        self.assertEqual(
+            result["indicators"]["risk"]["drivers"][0],
+            "Qualitative assessment temporarily unavailable.",
+        )
+        self.assertEqual(
+            result["indicators"]["competitive_position"]["drivers"][0],
+            "Qualitative assessment temporarily unavailable.",
+        )
+        self.assertEqual(
+            result["indicators"]["market_environment"]["drivers"][0],
+            "Insufficient evidence from previously collected features.",
+        )
+
+    def test_feature10_unavailable_does_not_block_feature9_risk_or_peer_evidence(self):
+        context = {
+            "company": {"name": "Example Corp", "sector": "Energy"},
+            "company_analysis": {
+                "analysis": {
+                    "key_factors_to_watch": ["Deployment execution remains uncertain."],
+                    "peer_positioning": "Peer comparisons show mixed operating performance.",
+                },
+            },
+            "market_review": {
+                "status": "unavailable",
+                "review": None,
+            },
+        }
+        with patch(
+            "investment_research.assessment.gemini_provider.generate_qualitative_assessment",
+            return_value={"status": "unavailable", "indicators": {}},
+        ) as generate:
+            result = assessment.build_stock_assessment(context)
+
+        called_context = generate.call_args.args[0]
+        self.assertTrue(assessment._qualitative_evidence_available(called_context, "risk"))
+        self.assertTrue(
+            assessment._qualitative_evidence_available(called_context, "competitive_position")
+        )
+        self.assertFalse(
+            assessment._qualitative_evidence_available(called_context, "market_environment")
+        )
+        self.assertEqual(
+            result["indicators"]["market_environment"]["label"],
+            "N/A",
+        )
+        self.assertEqual(
+            result["indicators"]["risk"]["drivers"][0],
+            "Qualitative assessment temporarily unavailable.",
+        )
+
+    def test_feature9_unavailable_leaves_market_evidence_available(self):
+        context = {
+            "company": {"name": "Example Energy", "sector": "Energy"},
+            "company_analysis": {
+                "status": "unavailable",
+                "analysis": None,
+            },
+            "market_review": {
+                "status": "ok",
+                "review": {
+                    "industry_overview": "Power demand is rising.",
+                    "market_outlook": "Demand remains supportive.",
+                    "growth_drivers": ["Data centers add electricity demand."],
+                    "competitive_dynamics": ["Competing capacity affects market position."],
+                    "industry_risks": ["Permitting may delay new deployment."],
+                    "company_implications": ["Regulatory timing shapes commercialization."],
+                },
+            },
+        }
+        with patch(
+            "investment_research.assessment.gemini_provider.generate_qualitative_assessment",
+            return_value={"status": "unavailable", "indicators": {}},
+        ) as generate:
+            result = assessment.build_stock_assessment(context)
+
+        called_context = generate.call_args.args[0]
+        for key in ("risk", "market_environment", "competitive_position"):
+            self.assertTrue(assessment._qualitative_evidence_available(called_context, key))
+            self.assertEqual(
+                result["indicators"][key]["drivers"][0],
+                "Qualitative assessment temporarily unavailable.",
+            )
 
     def test_12a_results_are_unchanged_when_12b_raises(self):
         context = _assessment_context()
@@ -215,11 +559,36 @@ class TestFeature12B(unittest.TestCase):
         self.assertEqual(context["ticker"], "EXM")
         self.assertEqual(context["financial_snapshot"]["revenue_growth"], 12.0)
         self.assertEqual(context["market_review"]["tailwinds"], ["Cloud adoption supports demand."])
+        self.assertEqual(context["market_review"]["company_implications"], [
+            "Demand may change.", "Execution matters.", "Competition matters.",
+        ])
         self.assertEqual(context["company_analysis"]["key_risks"], [
             "Execution against growth plans", "Customer retention",
         ])
         self.assertEqual(context["peer_context"]["peer_names"], ["PEER1", "PEER2"])
         self.assertEqual(context["market_review"]["sources"][0]["id"], "S1")
+
+    def test_pre_revenue_and_market_fit_evidence_reach_existing_12b_indicators(self):
+        source = _assessment_context()
+        source["financials"]["income"].update({
+            "revenue": [0.0],
+            "revenue_status": ["valid_zero"],
+            "revenue_stage": "pre_revenue",
+        })
+        source["market_review"]["review"]["company_implications"] = [
+            "Slow approvals may delay commercialization.",
+        ]
+        context = assessment.build_qualitative_context(source)
+
+        self.assertEqual(context["financial_snapshot"]["revenue_stage"], "pre_revenue")
+        self.assertEqual(context["financial_snapshot"]["revenue_status"], "valid_zero")
+        self.assertEqual(
+            context["market_review"]["company_implications"],
+            ["Slow approvals may delay commercialization."],
+        )
+        self.assertTrue(assessment._qualitative_evidence_available(context, "risk"))
+        self.assertTrue(assessment._qualitative_evidence_available(context, "market_environment"))
+        self.assertTrue(assessment._qualitative_evidence_available(context, "competitive_position"))
 
 
 if __name__ == "__main__":

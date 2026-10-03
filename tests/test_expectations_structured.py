@@ -2,7 +2,7 @@ import unittest
 from unittest.mock import patch, MagicMock
 import pandas as pd
 
-from investment_research import expectations
+from investment_research import display, expectations
 
 
 class TestExpectationsStructured(unittest.TestCase):
@@ -58,6 +58,37 @@ class TestExpectationsStructured(unittest.TestCase):
         self.assertAlmostEqual(cy['growth'], 0.831)
         self.assertAlmostEqual(ny['revenue'], 569500000000.0)
         self.assertAlmostEqual(ny['growth'], 0.44)
+        self.assertEqual(ny['growth_status'], "available")
+
+    @patch("investment_research.expectations.yf")
+    def test_pre_revenue_growth_estimates_are_not_meaningful_not_zero_or_unavailable(self, mock_yf):
+        mock_ticker = MagicMock()
+        mock_ticker.info = {
+            "earningsTrend": {
+                "trend": [
+                    {"period": "current", "revenue": 0.0, "revenueGrowth": 0.0},
+                    {"period": "+1y", "revenue": 100.0, "revenueGrowth": 1.0},
+                ],
+            },
+        }
+        mock_ticker.recommendations = pd.DataFrame()
+        mock_ticker.revenue_estimate = pd.DataFrame()
+        mock_yf.Ticker.return_value = mock_ticker
+
+        result = expectations.get_analyst_expectations("OKLO", revenue_stage="pre_revenue")
+        estimates = result["revenue_estimates"]
+        self.assertEqual(estimates["current_year"]["revenue"], 0.0)
+        self.assertIsNone(estimates["current_year"]["growth"])
+        self.assertEqual(estimates["current_year"]["reported_growth"], 0.0)
+        self.assertEqual(estimates["current_year"]["growth_status"], "not_meaningful")
+        self.assertIsNone(estimates["next_year"]["growth"])
+        self.assertEqual(estimates["next_year"]["reported_growth"], 1.0)
+        self.assertEqual(estimates["next_year"]["growth_status"], "not_meaningful")
+        self.assertTrue(any("not meaningful" in item for item in result["summary"]))
+        with patch("builtins.print") as printer:
+            display.print_analyst_expectations(result)
+        output = " ".join(str(call.args[0]) for call in printer.call_args_list if call.args)
+        self.assertIn("N/M", output)
 
 
 if __name__ == '__main__':

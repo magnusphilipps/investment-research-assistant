@@ -165,6 +165,22 @@ def _pct(numerator: float | None, denominator: float | None) -> float | None:
     return result * 100 if result is not None else None
 
 
+def _reported_value_status(value: float | None) -> str:
+    if value is None:
+        return "unavailable"
+    return "valid_zero" if value == 0 else "available"
+
+
+def _margin_status(value: float | None, revenue: float | None) -> str:
+    if revenue is None:
+        return "unavailable"
+    if revenue <= 0:
+        return "not_meaningful"
+    if value is None:
+        return "unavailable"
+    return _reported_value_status(value)
+
+
 # ------------------------------------------------------------
 # Income statement
 # ------------------------------------------------------------
@@ -261,18 +277,26 @@ def _compute_income(df) -> dict:
     #   revenue_growth[1] = (rev_2023 - rev_2022) / rev_2022 * 100
 
     revenue_growth: list[float | None] = []
+    revenue_growth_status: list[str] = []
 
     for i in range(n_years - 1):
         current = revenues[i]
         prior   = revenues[i + 1]
 
-        if current is not None and prior is not None:
+        if current is None or prior is None:
+            revenue_growth.append(None)
+            revenue_growth_status.append("unavailable")
+        elif current < 0 or prior <= 0:
+            revenue_growth.append(None)
+            revenue_growth_status.append("not_meaningful")
+        else:
             growth_pct = _safe_divide(current - prior, prior)
             revenue_growth.append(
                 growth_pct * 100 if growth_pct is not None else None
             )
-        else:
-            revenue_growth.append(None)
+            revenue_growth_status.append(
+                _reported_value_status(growth_pct * 100 if growth_pct is not None else None)
+            )
 
     # ---- Revenue growth acceleration ---------------------------
     # Compare the most recent annual growth rate with the prior one.
@@ -299,17 +323,38 @@ def _compute_income(df) -> dict:
         else:
             acceleration = "Broadly stable"
 
+    reported_revenues = [value for value in revenues if value is not None]
+    if reported_revenues and all(value == 0 for value in reported_revenues):
+        revenue_stage = "pre_revenue"
+    elif any(value > 0 for value in reported_revenues):
+        revenue_stage = "operating"
+    elif reported_revenues:
+        revenue_stage = "not_meaningful"
+    else:
+        revenue_stage = "unavailable"
+
     return {
         "years":          years,
         "revenue":        revenues,
+        "revenue_status": [_reported_value_status(value) for value in revenues],
+        "revenue_stage":  revenue_stage,
         "gross_profit":   gross_profits,
         "gross_margin":   gross_margins,
+        "gross_margin_status": [
+            _margin_status(value, revenue)
+            for value, revenue in zip(gross_profits, revenues)
+        ],
         "op_income":      op_incomes,
         "op_margin":      op_margins,
+        "op_margin_status": [
+            _margin_status(value, revenue)
+            for value, revenue in zip(op_incomes, revenues)
+        ],
         "net_income":     net_incomes,
         "eps_diluted":    eps_list,
         "shares_diluted": shares_list,
         "revenue_growth": revenue_growth,
+        "revenue_growth_status": revenue_growth_status,
         "acceleration":   acceleration,
     }
 
@@ -597,6 +642,7 @@ def get_ratios(ticker_symbol: str, fin: dict) -> dict:
 
     # Net Margin = Net Income / Revenue * 100
     net_margin = _pct(net_income, revenue)
+    net_margin_status = _margin_status(net_income, revenue)
 
     # Return on Equity = Net Income / Shareholders Equity * 100
     # Not meaningful when equity is zero or negative (same reasoning
@@ -612,7 +658,12 @@ def get_ratios(ticker_symbol: str, fin: dict) -> dict:
     profitability = {
         "eps":        eps,
         "net_margin": net_margin,
+        "net_margin_status": net_margin_status,
         "op_margin":  op_margin,
+        "op_margin_status": (
+            inc.get("op_margin_status", [None])[0]
+            if inc.get("op_margin_status") else "unavailable"
+        ),
         "roe":        roe,
         "roa":        roa,
     }
@@ -660,16 +711,55 @@ def get_ratios(ticker_symbol: str, fin: dict) -> dict:
     # field ("enterpriseToEbitda") can lag or differ in rounding
     # from the individual EV and EBITDA fields we already have.
     # _safe_divide() returns None if either value is missing or zero.
-    ev_ebitda = _safe_divide(ev, ebitda)
+    ev_ebitda = (
+        _safe_divide(ev, ebitda)
+        if ev is not None and ev > 0 and ebitda is not None and ebitda > 0
+        else None
+    )
+    trailing_pe = info.get("trailingPE")
+    forward_pe = info.get("forwardPE")
+    peg = info.get("pegRatio")
+    price_to_book = info.get("priceToBook")
+    trailing_pe_status = _reported_value_status(trailing_pe)
+    forward_pe_status = _reported_value_status(forward_pe)
+    peg_status = _reported_value_status(peg)
+    price_to_book_status = _reported_value_status(price_to_book)
+    if net_income is not None and net_income <= 0:
+        trailing_pe = None
+        peg = None
+        trailing_pe_status = "not_meaningful"
+        peg_status = "not_meaningful"
+    elif trailing_pe is not None and trailing_pe <= 0:
+        trailing_pe = None
+        trailing_pe_status = "not_meaningful"
+    if forward_pe is not None and forward_pe <= 0:
+        forward_pe = None
+        forward_pe_status = "not_meaningful"
+    if peg is not None and peg <= 0:
+        peg = None
+        peg_status = "not_meaningful"
+    if price_to_book is not None and price_to_book <= 0:
+        price_to_book = None
+        price_to_book_status = "not_meaningful"
+    ev_ebitda_status = (
+        "unavailable" if ev is None or ebitda is None
+        else "not_meaningful" if ev <= 0 or ebitda <= 0
+        else _reported_value_status(ev_ebitda)
+    )
 
     valuation = {
-        "trailing_pe": info.get("trailingPE"),
-        "forward_pe":  info.get("forwardPE"),
-        "peg":         info.get("pegRatio"),
+        "trailing_pe": trailing_pe,
+        "trailing_pe_status": trailing_pe_status,
+        "forward_pe":  forward_pe,
+        "forward_pe_status": forward_pe_status,
+        "peg":         peg,
+        "peg_status":  peg_status,
         "ev":          ev,
         "ebitda":      ebitda,
         "ev_ebitda":   ev_ebitda,
-        "pb":          info.get("priceToBook"),
+        "ev_ebitda_status": ev_ebitda_status,
+        "pb":          price_to_book,
+        "pb_status":   price_to_book_status,
     }
 
     return {

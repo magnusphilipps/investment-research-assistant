@@ -1,6 +1,7 @@
 import io
 import unittest
 from contextlib import redirect_stdout
+from unittest.mock import patch
 
 import numpy as np
 import pandas as pd
@@ -93,6 +94,23 @@ class TestPeerComparison(unittest.TestCase):
         )
         summary = peers._build_factual_summary("AAPL", df)
         self.assertIn("all 3 selected peers", summary[1])
+
+    def test_zero_multiples_are_not_meaningful_but_zero_margins_are_valid(self):
+        self.assertFalse(peers._is_valid_metric_value(0.0, metric_name="P/E"))
+        self.assertFalse(peers._is_valid_metric_value(0.0, metric_name="Forward P/E"))
+        self.assertFalse(peers._is_valid_metric_value(0.0, metric_name="EV/EBITDA"))
+        self.assertTrue(peers._is_valid_metric_value(0.0, metric_name="Operating Margin"))
+
+    def test_peer_identity_probe_rejects_symbol_only_and_propagates_provider_failures(self):
+        with patch(
+            "investment_research.peers.yf.Ticker"
+        ) as ticker:
+            ticker.return_value.info = {"symbol": "NOTREAL"}
+            self.assertFalse(peers._ticker_exists("NOTREAL"))
+
+            ticker.side_effect = RuntimeError("provider failure")
+            with self.assertRaisesRegex(RuntimeError, "provider failure"):
+                peers._ticker_exists("AAPL")
 
     def test_negative_operating_margin_and_growth_stay_valid(self):
         self.assertEqual(display.format_percent(-151.8), "-151.8%")

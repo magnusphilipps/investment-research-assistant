@@ -7,4 +7,5 @@ dependencies = [
     "yfinance>=1.5.2",
     "google-genai>=1.15.0",
     "requests>=2.31.0",
+    "streamlit>=1.40.0",
 ]
