@@ -7,7 +7,7 @@ import streamlit as st
 
 load_dotenv(".env")
 
-from investment_research import assessment_display, display, main
+from investment_research import assessment_display, display, main, qualitative_display
 
 
 st.set_page_config(page_title="Investment Research Assistant")
@@ -78,3 +78,35 @@ if isinstance(report, dict):
                 )
                 if card["driver"]:
                     st.caption(card["driver"])
+
+    qualitative_sections = (
+        ("AI Company Analysis", qualitative_display.get_company_analysis_display(report)),
+        ("Market & Industry Review", qualitative_display.get_market_review_display(report)),
+        ("Bull / Bear Scenario Analysis", qualitative_display.get_bull_bear_display(report)),
+    )
+    for title, section in qualitative_sections:
+        with st.expander(title, expanded=False):
+            if not section["available"]:
+                st.info(section["message"])
+                continue
+
+            for item in section["sections"]:
+                st.markdown(f"**{item['title']}**")
+                if item["kind"] == "text":
+                    st.write(item["content"])
+                else:
+                    for bullet in item["content"]:
+                        st.markdown(f"- {bullet}")
+
+            if title == "Market & Industry Review" and section["sources"]:
+                st.markdown("**Sources**")
+                for source in section["sources"]:
+                    if source["url"] and source["title"]:
+                        st.markdown(f"[{source['title']}]({source['url']})")
+                    elif source["title"]:
+                        st.write(source["title"])
+                    details = [
+                        value for value in (source["source"], source["published_at"]) if value
+                    ]
+                    if details:
+                        st.caption(" · ".join(details))

@@ -141,6 +141,19 @@ After analysis, the report is stored in
 widget changes, but rendering the dashboard reuses that saved report instead of
 running the analysis APIs again.
 
+### Feature 13C — Streamlit Qualitative Research Sections
+
+Three collapsed expanders keep the assessment dashboard compact while making
+the existing AI Company Analysis, Market & Industry Review, and Bull / Bear
+Scenario Analysis available below it. Streamlit reads the already stored
+Feature 9–11 results from `st.session_state["research_report"]`; it does not
+repeat their analysis or call Gemini, Tavily, Marketaux, or financial-data
+providers when an expander is opened. Small display helpers clean up the
+presentation fields without changing analysis logic. Missing qualitative
+features fail independently, so an unavailable section does not hide the
+others. Feature 10 shows compact source title, publisher/date, and links when
+the report contains those fields.
+
 ---
 
 ## How to Run
@@ -167,7 +180,7 @@ Type `quit` or `q` to exit.
 investment_research_assistant/
 │
 ├── run.py                          # Entry point — run this to start the app
-├── app.py                          # Streamlit stock assessment dashboard
+├── app.py                          # Streamlit assessment and qualitative dashboard
 │
 ├── investment_research/            # All application code lives here
 │   ├── __init__.py                 # Marks the folder as a Python package
@@ -181,7 +194,8 @@ investment_research_assistant/
 │   ├── gemini_provider.py          # Isolated Google Gemini provider integration
 │   ├── performance.py               # Fetches adjusted prices and calculates performance metrics
 │   ├── display.py                  # Formats and prints all output to the terminal
-│   └── assessment_display.py       # Extracts display-safe assessment card data
+│   ├── assessment_display.py       # Extracts display-safe assessment card data
+│   └── qualitative_display.py     # Extracts display-safe Feature 9–11 content
 │
 ├── README.md                       # This file
 ├── replit.md                       # Developer notes and project overview
@@ -195,8 +209,9 @@ investment_research_assistant/
 |---|---|
 | `run.py` | Single entry point. Imports `main.run()` and calls it. |
 | `investment_research/main.py` | Builds the structured report and renders it in the terminal. |
-| `app.py` | Streamlit stock assessment dashboard; delegates analysis to `build_report()`. |
+| `app.py` | Streamlit assessment and qualitative dashboard; delegates analysis to `build_report()`. |
 | `investment_research/assessment_display.py` | Extracts labels and first drivers without exposing hidden assessment scores. |
+| `investment_research/qualitative_display.py` | Cleans Feature 9–11 report sections and source labels for display. |
 | `investment_research/fetcher.py` | Fetches price, market cap, and company overview from `ticker.info`. |
 | `investment_research/financials.py` | Fetches annual statements (DataFrames), extracts line items with fallback label lists, calculates margins/ratios/FCF. |
 | `investment_research/news.py` | Reads `MARKETAUX_API_KEY`, requests recent Marketaux news, standardises article metadata, and handles API failures. |
