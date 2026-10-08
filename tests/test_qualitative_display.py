@@ -430,11 +430,38 @@ class QualitativeDisplayTests(unittest.TestCase):
             ("Market & Industry Review", {"expanded": False}),
             ("Bull / Bear Scenario Analysis", {"expanded": False}),
         ])
+        self.assertEqual(
+            [key for _, key, _ in fake_streamlit.buttons],
+            [
+                "assessment-evidence-valuation",
+                "assessment-evidence-financial_quality",
+                "assessment-evidence-growth",
+                "assessment-evidence-risk",
+                "assessment-evidence-volatility",
+                "assessment-evidence-market_environment",
+                "assessment-evidence-competitive_position",
+                "assessment-evidence-expectations",
+            ],
+        )
+        self.assertNotIn("Supporting evidence", [title for title, _ in fake_streamlit.expanders])
+        rendered_cards = "\n".join(fake_streamlit.markdown_calls)
+        for indicator_name in (
+            "Valuation",
+            "Financial Quality",
+            "Growth",
+            "Risk",
+            "Volatility",
+            "Market Environment",
+            "Competitive Position",
+            "Expectations",
+        ):
+            self.assertIn(f"**{indicator_name}**", rendered_cards)
         rendered = "\n".join(fake_streamlit.markdown_calls + fake_streamlit.write_calls)
         self.assertIn("Stored company analysis.", rendered)
         self.assertIn("Stored market review.", rendered)
         self.assertIn("Stored scenario analysis.", rendered)
         self.assertIn("[Stored source](https://research.example/report)", rendered)
+        self.assertIsNone(fake_streamlit.session_state.get("selected_evidence_indicator"))
         build_report.assert_not_called()
         company_provider.assert_not_called()
         market_provider.assert_not_called()
@@ -477,6 +504,111 @@ class QualitativeDisplayTests(unittest.TestCase):
         self.assertIn("Scenario content remains visible.", rendered)
         build_report.assert_not_called()
 
+    def test_row_one_selection_renders_full_width_evidence_after_row_one(self):
+        fake_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            click_button_key="assessment-evidence-valuation",
+        )
+        _run_app(fake_streamlit)
+
+        events = fake_streamlit.events
+        panel_index = events.index(("markdown", "### Valuation"))
+        row_one_last_card_index = events.index(("markdown", "**Risk**"))
+        row_two_first_card_index = events.index(("markdown", "**Volatility**"))
+        self.assertLess(row_one_last_card_index, panel_index)
+        self.assertLess(panel_index, row_two_first_card_index)
+        self.assertEqual(
+            fake_streamlit.session_state["selected_evidence_indicator"],
+            "valuation",
+        )
+        self.assertEqual(fake_streamlit.tables[0][0], {"Metric": "Trailing P/E", "Value": "20.50x"})
+
+    def test_row_two_selection_renders_full_width_evidence_after_row_two(self):
+        fake_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            click_button_key="assessment-evidence-volatility",
+        )
+        _run_app(fake_streamlit)
+
+        events = fake_streamlit.events
+        last_row_card_index = events.index(("markdown", "**Expectations**"))
+        panel_index = events.index(("markdown", "### Volatility"))
+        self.assertLess(last_row_card_index, panel_index)
+        self.assertEqual(
+            fake_streamlit.session_state["selected_evidence_indicator"],
+            "volatility",
+        )
+        self.assertNotIn("daily_returns", str(fake_streamlit.tables))
+
+    def test_evidence_selection_switches_and_toggles_without_rebuilding_report(self):
+        fake_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            click_button_key="assessment-evidence-volatility",
+            selected_indicator="financial_quality",
+        )
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.build_report"
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13d_switch_test")
+
+        self.assertEqual(
+            fake_streamlit.session_state["selected_evidence_indicator"],
+            "volatility",
+        )
+        self.assertIn(("markdown", "### Volatility"), fake_streamlit.events)
+        self.assertNotIn(("markdown", "### Financial Quality"), fake_streamlit.events)
+        build_report.assert_not_called()
+
+        toggle_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            click_button_key="assessment-evidence-volatility",
+            selected_indicator="volatility",
+        )
+        with patch.dict(sys.modules, {"streamlit": toggle_streamlit}), patch(
+            "investment_research.main.build_report"
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13d_toggle_test")
+
+        self.assertIsNone(toggle_streamlit.session_state["selected_evidence_indicator"])
+        self.assertNotIn(("markdown", "### Volatility"), toggle_streamlit.events)
+        build_report.assert_not_called()
+
+
+def _dashboard_report():
+    from investment_research.assessment_display import ASSESSMENT_INDICATORS
+
+    return {
+        "ticker": "AAPL",
+        "company": {"name": "Apple Inc.", "price": 200, "market_cap": 1_000_000},
+        "assessment": {
+            "indicators": {
+                key: {
+                    "label": "High" if key == "volatility" else "Moderate",
+                    "drivers": [f"{name} driver."],
+                }
+                for key, name in ASSESSMENT_INDICATORS
+            }
+        },
+        "ratios": {
+            "valuation": {"trailing_pe": 20.5, "trailing_pe_status": "available"},
+        },
+        "price_performance": {
+            "daily_returns": [0.01] * 400,
+            "annualized_volatility": 0.48,
+            "beta": 1.71,
+            "max_drawdown": -0.374,
+            "returns": {"1 Month": 0.094, "6 Months": 0.066, "1 Year": -0.193},
+            "range": {"current_price": 200, "high": 250, "low": 150},
+        },
+    }
+
+
+def _run_app(fake_streamlit):
+    app_path = Path(__file__).resolve().parents[1] / "app.py"
+    with patch.dict(sys.modules, {"streamlit": fake_streamlit}):
+        runpy.run_path(str(app_path), run_name="feature_13d_layout_test")
+
 
 class _FakeColumn:
     def metric(self, *_args, **_kwargs):
@@ -487,12 +619,29 @@ class _FakeColumn:
 
 
 class _FakeStreamlit:
-    def __init__(self, saved_report):
+    def __init__(
+        self,
+        saved_report,
+        click_button_key=None,
+        selected_indicator=None,
+    ):
         self.session_state = {"research_report": saved_report}
+        self.click_button_key = click_button_key
+        if selected_indicator:
+            self.session_state["selected_evidence_indicator"] = selected_indicator
+        if click_button_key:
+            clicked_indicator = click_button_key.removeprefix("assessment-evidence-")
+            current = self.session_state.get("selected_evidence_indicator")
+            self.session_state["selected_evidence_indicator"] = (
+                None if current == clicked_indicator else clicked_indicator
+            )
         self.expanders = []
+        self.buttons = []
         self.markdown_calls = []
         self.write_calls = []
         self.info_calls = []
+        self.events = []
+        self.tables = []
 
     def set_page_config(self, **_kwargs):
         return None
@@ -502,6 +651,7 @@ class _FakeStreamlit:
 
     def write(self, value, *_args, **_kwargs):
         self.write_calls.append(str(value))
+        self.events.append(("write", str(value)))
 
     def subheader(self, *_args, **_kwargs):
         return None
@@ -511,12 +661,18 @@ class _FakeStreamlit:
 
     def markdown(self, value, **_kwargs):
         self.markdown_calls.append(str(value))
+        self.events.append(("markdown", str(value)))
 
     def caption(self, *_args, **_kwargs):
         return None
 
     def info(self, value, *_args, **_kwargs):
         self.info_calls.append(str(value))
+
+    def table(self, *_args, **_kwargs):
+        rows = _args[0] if _args else _kwargs.get("data")
+        self.tables.append(rows)
+        self.events.append(("table", rows))
 
     def text_input(self, *_args, **_kwargs):
         return ""
@@ -529,6 +685,14 @@ class _FakeStreamlit:
 
     def expander(self, title, **kwargs):
         self.expanders.append((title, kwargs))
+        return nullcontext()
+
+    def button(self, label, *, key, **kwargs):
+        self.buttons.append((label, key, kwargs))
+        self.events.append(("button", key))
+        return False
+
+    def container(self, **_kwargs):
         return nullcontext()
 
     def spinner(self, *_args, **_kwargs):

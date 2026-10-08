@@ -10,6 +10,60 @@ load_dotenv(".env")
 from investment_research import assessment_display, display, main, qualitative_display
 
 
+def _toggle_assessment_evidence(indicator_key: str) -> None:
+    current = st.session_state.get("selected_evidence_indicator")
+    st.session_state["selected_evidence_indicator"] = (
+        None if current == indicator_key else indicator_key
+    )
+
+
+def _render_assessment_evidence(
+    report: dict,
+    card: dict[str, str],
+    indicator_key: str,
+) -> None:
+    """Render selected indicator evidence at the page width below its card row."""
+    evidence = assessment_display.get_indicator_evidence_display(
+        report, indicator_key, card["name"]
+    )
+    with st.container(border=True):
+        st.markdown(f"### {escape(card['name'])}")
+        style = escape(card["style"])
+        label = escape(card["label"])
+        st.markdown(
+            f'<span class="assessment-badge assessment-{style}">{label}</span>',
+            unsafe_allow_html=True,
+        )
+        if card["driver"]:
+            st.caption(card["driver"])
+        st.markdown("**Supporting Evidence**")
+
+        groups = dict.fromkeys(
+            metric["group"] for metric in evidence["metrics"] if metric["group"]
+        )
+        for group in groups:
+            st.markdown(f"**{escape(group)}**")
+            rows = [
+                {"Metric": metric["label"], "Value": metric["value"]}
+                for metric in evidence["metrics"]
+                if metric["group"] == group
+            ]
+            st.table(rows)
+
+        for table in evidence["tables"]:
+            st.markdown(f"**{escape(table['title'])}**")
+            st.table(table["rows"])
+        for paragraph in evidence["paragraphs"]:
+            st.markdown(f"**{escape(paragraph['title'])}**")
+            st.write(paragraph["text"])
+        for section in evidence["bullets"]:
+            st.markdown(f"**{escape(section['title'])}**")
+            for bullet in section["items"]:
+                st.markdown(f"- {bullet}")
+        if not evidence["available"]:
+            st.info("No supporting evidence is available for this indicator.")
+
+
 st.set_page_config(page_title="Investment Research Assistant")
 st.title("Investment Research Assistant")
 st.write("Research public companies using the existing analysis pipeline.")
@@ -36,6 +90,7 @@ with st.form("ticker_analysis_form"):
 
 if submitted:
     st.session_state.pop("research_report", None)
+    st.session_state.pop("selected_evidence_indicator", None)
     if not ticker:
         st.error("Please enter a ticker symbol.")
     else:
@@ -65,9 +120,15 @@ if isinstance(report, dict):
     st.markdown(ASSESSMENT_STYLES, unsafe_allow_html=True)
     st.subheader("Stock Assessment")
     assessment_cards = assessment_display.get_assessment_display(report)
+    indicator_specs = assessment_display.ASSESSMENT_INDICATORS
+    selected_indicator = st.session_state.get("selected_evidence_indicator")
     for start in range(0, len(assessment_cards), 4):
         columns = st.columns(4)
-        for column, card in zip(columns, assessment_cards[start : start + 4]):
+        for column, card, (indicator_key, _) in zip(
+            columns,
+            assessment_cards[start : start + 4],
+            indicator_specs[start : start + 4],
+        ):
             with column.container(border=True):
                 st.markdown(f"**{escape(card['name'])}**")
                 style = escape(card["style"])
@@ -78,6 +139,28 @@ if isinstance(report, dict):
                 )
                 if card["driver"]:
                     st.caption(card["driver"])
+                is_selected = selected_indicator == indicator_key
+                st.button(
+                    "Hide evidence" if is_selected else "View evidence",
+                    key=f"assessment-evidence-{indicator_key}",
+                    use_container_width=True,
+                    on_click=_toggle_assessment_evidence,
+                    args=(indicator_key,),
+                )
+
+        selected_index = next(
+            (
+                index for index, (key, _) in enumerate(indicator_specs)
+                if key == selected_indicator
+            ),
+            None,
+        )
+        if selected_index is not None and start <= selected_index < start + 4:
+            _render_assessment_evidence(
+                report,
+                assessment_cards[selected_index],
+                indicator_specs[selected_index][0],
+            )
 
     qualitative_sections = (
         ("AI Company Analysis", qualitative_display.get_company_analysis_display(report)),
