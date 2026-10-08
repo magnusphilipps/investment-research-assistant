@@ -1,6 +1,8 @@
 """Streamlit entry point for the stock assessment dashboard."""
 
 from html import escape
+from random import choice
+from typing import Any
 
 from dotenv import load_dotenv
 import streamlit as st
@@ -8,6 +10,25 @@ import streamlit as st
 load_dotenv(".env")
 
 from investment_research import assessment_display, display, main, qualitative_display
+
+
+LOADING_MESSAGES = (
+    "Fun fact: The first stock ticker tape machine appeared in 1867.",
+    "Market joke: Analysts have predicted nine of the last five recessions.",
+    "Fun fact: The NYSE began under a buttonwood tree in 1792.",
+    "Market joke: A long-term investor is someone who forgot their password.",
+    "Fun fact: The word 'stock' once referred to wooden tally sticks used to record debt.",
+    "Market joke: The market is a device for transferring money from the impatient to the patient.",
+    "Fun fact: The Dow Jones Industrial Average started with 12 companies.",
+    "Market joke: Diversification is what happens when you run out of ticker symbols to watch.",
+    "Fun fact: Some early exchanges traded commodities as well as company shares.",
+    "Market joke: The only predictable thing about markets is how confidently people predict them.",
+)
+
+
+def _loading_message() -> str:
+    """Select a short, local loading message without external calls."""
+    return choice(LOADING_MESSAGES)
 
 
 def _toggle_assessment_evidence(indicator_key: str) -> None:
@@ -64,23 +85,71 @@ def _render_assessment_evidence(
             st.info("No supporting evidence is available for this indicator.")
 
 
-st.set_page_config(page_title="Investment Research Assistant")
-st.title("Investment Research Assistant")
-st.write("Research public companies using the existing analysis pipeline.")
+def _render_loading_company(placeholder: Any, company: dict[str, Any]) -> None:
+    description = company.get("description")
+    with placeholder.container():
+        if isinstance(description, str) and description.strip():
+            name = company.get("name") or company.get("ticker") or "Company"
+            placeholder.markdown(
+                f"**{escape(str(name))}**\n\n"
+                f'<div class="company-description">{escape(description.strip())}</div>',
+                unsafe_allow_html=True,
+            )
+            placeholder.divider()
+            placeholder.caption("While you wait")
+        placeholder.caption(_loading_message())
+
+
+st.set_page_config(page_title="Stock Checker")
+st.title("Stock Checker")
+st.write("Research public companies with company, financial, and market context.")
 
 ASSESSMENT_STYLES = """
 <style>
 .assessment-badge {
     display: inline-block;
-    padding: 0.15rem 0.55rem;
+    padding: 0.2rem 0.65rem;
     border-radius: 999px;
     font-size: 0.85rem;
     font-weight: 600;
+    border: 1px solid transparent;
 }
-.assessment-positive { color: #1b5e20; background: #e8f5e9; }
-.assessment-neutral { color: #34495e; background: #eef2f6; }
-.assessment-caution { color: #8a3b12; background: #fff3e0; }
-.assessment-muted { color: #65717c; background: #f1f3f5; }
+.assessment-positive { color: #ffffff; background: #166534; border-color: #14532d; }
+.assessment-neutral { color: #ffffff; background: #1e40af; border-color: #1e3a8a; }
+.assessment-caution { color: #ffffff; background: #c2410c; border-color: #9a3412; }
+.assessment-muted { color: #ffffff; background: #4b5563; border-color: #374151; }
+.assessment-card {
+    box-sizing: border-box;
+    height: 190px;
+    padding: 0.9rem;
+    border: 1px solid #64748b;
+    border-radius: 0.75rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.45rem;
+}
+.assessment-card-title {
+    font-size: 1rem;
+    font-weight: 650;
+    line-height: 1.25;
+    min-height: 2.5rem;
+    overflow-wrap: anywhere;
+}
+.assessment-card-driver {
+    flex: 1;
+    min-height: 0;
+    overflow-y: auto;
+    overflow-wrap: anywhere;
+    line-height: 1.35;
+}
+.company-description {
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 4;
+    overflow: hidden;
+    line-height: 1.5;
+    margin: 0.35rem 0 1rem;
+}
 </style>
 """
 
@@ -96,16 +165,29 @@ if submitted:
     else:
         report = None
         build_failed = False
-        with st.spinner(f"Analysing {ticker}..."):
+        with st.spinner(f"Checking {ticker}..."):
+            company = None
             try:
-                report = main.build_report(ticker)
+                company = main.get_company_info(ticker)
             except main.ReportBuildError:
                 build_failed = True
                 st.error("Could not complete the analysis. Please try again.")
-            if report is None and not build_failed:
+            if company is None and not build_failed:
                 st.error("Ticker not found. Check the symbol and try again.")
-            elif report is not None:
-                st.session_state["research_report"] = report
+            elif company is not None:
+                loading_placeholder = st.empty()
+                _render_loading_company(loading_placeholder, company)
+                try:
+                    report = main.build_report(ticker, preloaded_company=company)
+                except main.ReportBuildError:
+                    build_failed = True
+                    st.error("Could not complete the analysis. Please try again.")
+                finally:
+                    loading_placeholder.empty()
+                if report is not None:
+                    st.session_state["research_report"] = report
+                elif not build_failed:
+                    st.error("Ticker not found. Check the symbol and try again.")
 
 report = st.session_state.get("research_report")
 if isinstance(report, dict):
@@ -116,6 +198,12 @@ if isinstance(report, dict):
     header_columns = st.columns(2)
     header_columns[0].metric("Share Price", display.format_price(company.get("price")))
     header_columns[1].metric("Market Cap", display.format_market_cap(company.get("market_cap")))
+    description = company.get("description")
+    if isinstance(description, str) and description.strip():
+        st.markdown(
+            f'<div class="company-description">{escape(description.strip())}</div>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown(ASSESSMENT_STYLES, unsafe_allow_html=True)
     st.subheader("Stock Assessment")
@@ -129,24 +217,25 @@ if isinstance(report, dict):
             assessment_cards[start : start + 4],
             indicator_specs[start : start + 4],
         ):
-            with column.container(border=True):
-                st.markdown(f"**{escape(card['name'])}**")
-                style = escape(card["style"])
-                label = escape(card["label"])
-                st.markdown(
-                    f'<span class="assessment-badge assessment-{style}">{label}</span>',
-                    unsafe_allow_html=True,
-                )
-                if card["driver"]:
-                    st.caption(card["driver"])
-                is_selected = selected_indicator == indicator_key
-                st.button(
-                    "Hide evidence" if is_selected else "View evidence",
-                    key=f"assessment-evidence-{indicator_key}",
-                    use_container_width=True,
-                    on_click=_toggle_assessment_evidence,
-                    args=(indicator_key,),
-                )
+            style = escape(card["style"])
+            label = escape(card["label"])
+            driver = escape(card["driver"]) or " "
+            column.markdown(
+                f'<div class="assessment-card">'
+                f'<div class="assessment-card-title">{escape(card["name"])}</div>'
+                f'<div><span class="assessment-badge assessment-{style}">{label}</span></div>'
+                f'<div class="assessment-card-driver">{driver}</div>'
+                "</div>",
+                unsafe_allow_html=True,
+            )
+            is_selected = selected_indicator == indicator_key
+            column.button(
+                "Hide evidence" if is_selected else "View evidence",
+                key=f"assessment-evidence-{indicator_key}",
+                use_container_width=True,
+                on_click=_toggle_assessment_evidence,
+                args=(indicator_key,),
+            )
 
         selected_index = next(
             (

@@ -82,6 +82,45 @@ class StructuredReportTests(unittest.TestCase):
         statements.assert_not_called()
         market.assert_not_called()
 
+    def test_preloaded_company_is_reused_without_a_second_lookup(self):
+        from contextlib import ExitStack
+
+        company = {
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "price": 225.0,
+            "market_cap": 3_000_000_000_000,
+        }
+        with ExitStack() as stack:
+            values = self._patch_pipeline(stack)
+            lookup = stack.enter_context(
+                patch("investment_research.main.fetcher.get_stock_info")
+            )
+            report = main.build_report("aapl", preloaded_company=company)
+
+        lookup.assert_not_called()
+        self.assertIs(report["company"], company)
+        self.assertEqual(report["ticker"], "AAPL")
+        self.assertEqual(set(report), {
+            "ticker", "company", "financials", "ratios", "peers",
+            "price_performance", "expectations", "news", "company_analysis",
+            "market_review", "bull_bear", "assessment", "errors",
+        })
+        self.assertEqual(report["assessment"], values[-2])
+
+    def test_preloaded_none_does_not_run_later_features(self):
+        with patch(
+            "investment_research.main.fetcher.get_stock_info",
+            return_value=None,
+        ) as lookup, patch(
+            "investment_research.main.financials.get_financial_statements"
+        ) as statements:
+            report = main.build_report("NOPE", preloaded_company=None)
+
+        lookup.assert_called_once_with("NOPE")
+        self.assertIsNone(report)
+        statements.assert_not_called()
+
     def test_optional_feature_failures_do_not_prevent_report_creation(self):
         from contextlib import ExitStack
 
@@ -132,4 +171,3 @@ class StructuredReportTests(unittest.TestCase):
 
         build.assert_called_once_with("AAPL")
         render.assert_called_once_with(report)
-

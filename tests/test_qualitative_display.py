@@ -443,8 +443,14 @@ class QualitativeDisplayTests(unittest.TestCase):
                 "assessment-evidence-expectations",
             ],
         )
-        self.assertNotIn("Supporting evidence", [title for title, _ in fake_streamlit.expanders])
-        rendered_cards = "\n".join(fake_streamlit.markdown_calls)
+        self.assertEqual(
+            sum('class="assessment-card"' in markup for markup in fake_streamlit.markdown_calls),
+            8,
+        )
+        rendered_cards = "\n".join(
+            markup for markup in fake_streamlit.markdown_calls
+            if 'class="assessment-card"' in markup
+        )
         for indicator_name in (
             "Valuation",
             "Financial Quality",
@@ -455,7 +461,7 @@ class QualitativeDisplayTests(unittest.TestCase):
             "Competitive Position",
             "Expectations",
         ):
-            self.assertIn(f"**{indicator_name}**", rendered_cards)
+            self.assertIn(f'class="assessment-card-title">{indicator_name}</div>', rendered_cards)
         rendered = "\n".join(fake_streamlit.markdown_calls + fake_streamlit.write_calls)
         self.assertIn("Stored company analysis.", rendered)
         self.assertIn("Stored market review.", rendered)
@@ -513,8 +519,14 @@ class QualitativeDisplayTests(unittest.TestCase):
 
         events = fake_streamlit.events
         panel_index = events.index(("markdown", "### Valuation"))
-        row_one_last_card_index = events.index(("markdown", "**Risk**"))
-        row_two_first_card_index = events.index(("markdown", "**Volatility**"))
+        row_one_last_card_index = next(
+            index for index, (kind, value) in enumerate(events)
+            if kind == "markdown" and "assessment-card-title\">Risk</div>" in value
+        )
+        row_two_first_card_index = next(
+            index for index, (kind, value) in enumerate(events)
+            if kind == "markdown" and "assessment-card-title\">Volatility</div>" in value
+        )
         self.assertLess(row_one_last_card_index, panel_index)
         self.assertLess(panel_index, row_two_first_card_index)
         self.assertEqual(
@@ -531,7 +543,10 @@ class QualitativeDisplayTests(unittest.TestCase):
         _run_app(fake_streamlit)
 
         events = fake_streamlit.events
-        last_row_card_index = events.index(("markdown", "**Expectations**"))
+        last_row_card_index = next(
+            index for index, (kind, value) in enumerate(events)
+            if kind == "markdown" and "assessment-card-title\">Expectations</div>" in value
+        )
         panel_index = events.index(("markdown", "### Volatility"))
         self.assertLess(last_row_card_index, panel_index)
         self.assertEqual(
@@ -574,6 +589,164 @@ class QualitativeDisplayTests(unittest.TestCase):
         self.assertNotIn(("markdown", "### Volatility"), toggle_streamlit.events)
         build_report.assert_not_called()
 
+    def test_stock_checker_branding_and_assessment_style_categories(self):
+        fake_streamlit = _FakeStreamlit(_dashboard_report())
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}):
+            runpy.run_path(str(app_path), run_name="feature_13e_branding_test")
+
+        self.assertEqual(fake_streamlit.page_config["page_title"], "Stock Checker")
+        self.assertEqual(fake_streamlit.title_calls, ["Stock Checker"])
+        css = "\n".join(fake_streamlit.markdown_calls)
+        for category in ("positive", "neutral", "caution", "muted"):
+            self.assertIn(f".assessment-{category}", css)
+        self.assertIn("height: 190px", css)
+        self.assertIn("overflow-y: auto", css)
+        self.assertIn("assessment-card-driver", css)
+
+    def test_company_description_is_escaped_and_missing_description_is_omitted(self):
+        report = _dashboard_report()
+        report["company"]["description"] = "<script>alert('x')</script> Company overview."
+        with_description = _FakeStreamlit(report)
+        _run_app(with_description)
+        description_markup = next(
+            markup for markup in with_description.markdown_calls
+            if 'class="company-description"' in markup
+        )
+        self.assertIn("&lt;script&gt;", description_markup)
+        self.assertNotIn("<script>", description_markup)
+
+        report["company"].pop("description")
+        without_description = _FakeStreamlit(report)
+        _run_app(without_description)
+        self.assertFalse(any(
+            'class="company-description"' in markup
+            for markup in without_description.markdown_calls
+        ))
+
+    def test_loading_message_is_selected_locally_without_provider_calls(self):
+        fake_streamlit = _FakeStreamlit(
+            {"company": {"name": "Apple Inc.", "description": "Company description."}},
+        )
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.gemini_provider.generate_analysis"
+        ) as company_provider, patch(
+            "investment_research.gemini_provider.generate_market_review"
+        ) as market_provider, patch("investment_research.tavily_provider.search") as search:
+            app_globals = runpy.run_path(str(app_path), run_name="feature_13e_loading_test")
+            message = app_globals["_loading_message"]()
+        self.assertGreaterEqual(len(app_globals["LOADING_MESSAGES"]), 8)
+        self.assertIn(message, app_globals["LOADING_MESSAGES"])
+        company_provider.assert_not_called()
+        market_provider.assert_not_called()
+        search.assert_not_called()
+
+    def test_analysis_submission_builds_report_once_and_uses_local_loading_copy(self):
+        report = _dashboard_report()
+        report["company"]["description"] = "Company overview."
+        fake_streamlit = _FakeStreamlit(
+            {},
+            submitted=True,
+            ticker="AAPL",
+        )
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.get_company_info",
+            return_value=report["company"],
+        ) as get_company_info, patch(
+            "investment_research.main.build_report",
+            return_value=report,
+        ) as build_report, patch(
+            "investment_research.gemini_provider.generate_analysis"
+        ) as company_provider, patch(
+            "investment_research.gemini_provider.generate_market_review"
+        ) as market_provider, patch("investment_research.tavily_provider.search") as search:
+            runpy.run_path(str(app_path), run_name="feature_13e_submit_test")
+
+        get_company_info.assert_called_once_with("AAPL")
+        build_report.assert_called_once_with("AAPL", preloaded_company=report["company"])
+        self.assertTrue(fake_streamlit.info_calls)
+        self.assertEqual(fake_streamlit.spinner_labels, ["Checking AAPL..."])
+        loading_copy = "\n".join(fake_streamlit.loading_caption_calls)
+        self.assertIn("While you wait", loading_copy)
+        self.assertTrue("Fun fact:" in loading_copy or "Market joke:" in loading_copy)
+        self.assertIn("Company overview.", "\n".join(fake_streamlit.markdown_calls))
+        company_provider.assert_not_called()
+        market_provider.assert_not_called()
+        search.assert_not_called()
+
+    def test_loading_description_precedes_build_and_company_lookup_runs_once(self):
+        company = {
+            "ticker": "AAPL",
+            "name": "Apple Inc.",
+            "description": "Existing company description.",
+            "price": 200,
+            "market_cap": 1_000_000,
+        }
+        report = _dashboard_report()
+        fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+
+        def build_after_loading(ticker, *, preloaded_company):
+            self.assertEqual(ticker, "AAPL")
+            self.assertIs(preloaded_company, company)
+            self.assertTrue(any("Existing company description." in value
+                                for value in fake_streamlit.loading_markdown_calls))
+            self.assertEqual(
+                fake_streamlit.loading_events[-3:][0],
+                ("divider",),
+            )
+            self.assertEqual(fake_streamlit.loading_events[-2], ("caption", "While you wait"))
+            self.assertIn(
+                fake_streamlit.loading_events[-1][1],
+                fake_streamlit.loading_messages,
+            )
+            return report
+
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.get_company_info",
+            return_value=company,
+        ) as lookup, patch(
+            "investment_research.main.build_report",
+            side_effect=build_after_loading,
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13e_loading_description_test")
+
+        lookup.assert_called_once_with("AAPL")
+        build_report.assert_called_once_with("AAPL", preloaded_company=company)
+        self.assertTrue(fake_streamlit.placeholder_cleared)
+
+    def test_invalid_ticker_does_not_start_report_build(self):
+        fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="NOPE")
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.get_company_info",
+            return_value=None,
+        ) as lookup, patch(
+            "investment_research.main.build_report"
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13e_invalid_ticker_test")
+
+        lookup.assert_called_once_with("NOPE")
+        build_report.assert_not_called()
+        self.assertIn(
+            "Ticker not found. Check the symbol and try again.",
+            fake_streamlit.error_calls,
+        )
+
+    def test_missing_loading_description_shows_only_local_fun_fact(self):
+        report = {"company": {"ticker": "AAPL", "name": "Apple Inc.", "description": None}}
+        fake_streamlit = _FakeStreamlit(report)
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}):
+            app_globals = runpy.run_path(str(app_path), run_name="feature_13e_missing_description_test")
+            placeholder = fake_streamlit.empty()
+            app_globals["_render_loading_company"](placeholder, report["company"])
+
+        self.assertIn(placeholder.parent.loading_messages[-1], app_globals["LOADING_MESSAGES"])
+        self.assertEqual(placeholder.markdown_calls, [])
+
 
 def _dashboard_report():
     from investment_research.assessment_display import ASSESSMENT_INDICATORS
@@ -611,8 +784,19 @@ def _run_app(fake_streamlit):
 
 
 class _FakeColumn:
+    def __init__(self, parent):
+        self.parent = parent
+
     def metric(self, *_args, **_kwargs):
         return None
+
+    def markdown(self, value, **_kwargs):
+        self.parent.markdown(value, **_kwargs)
+
+    def button(self, label, *, key, **kwargs):
+        self.parent.buttons.append((label, key, kwargs))
+        self.parent.events.append(("button", key))
+        return False
 
     def container(self, **_kwargs):
         return nullcontext()
@@ -624,8 +808,13 @@ class _FakeStreamlit:
         saved_report,
         click_button_key=None,
         selected_indicator=None,
+        *,
+        submitted=False,
+        ticker="",
     ):
         self.session_state = {"research_report": saved_report}
+        self.submitted = submitted
+        self.ticker = ticker
         self.click_button_key = click_button_key
         if selected_indicator:
             self.session_state["selected_evidence_indicator"] = selected_indicator
@@ -642,12 +831,21 @@ class _FakeStreamlit:
         self.info_calls = []
         self.events = []
         self.tables = []
+        self.error_calls = []
+        self.placeholder_cleared = False
+        self.loading_markdown_calls = []
+        self.page_config = {}
+        self.title_calls = []
+        self.spinner_labels = []
+        self.loading_caption_calls = []
+        self.loading_events = []
+        self.loading_messages = []
 
     def set_page_config(self, **_kwargs):
-        return None
+        self.page_config = _kwargs
 
-    def title(self, *_args, **_kwargs):
-        return None
+    def title(self, value, **_kwargs):
+        self.title_calls.append(value)
 
     def write(self, value, *_args, **_kwargs):
         self.write_calls.append(str(value))
@@ -657,7 +855,7 @@ class _FakeStreamlit:
         return None
 
     def columns(self, count):
-        return [_FakeColumn() for _ in range(count)]
+        return [_FakeColumn(self) for _ in range(count)]
 
     def markdown(self, value, **_kwargs):
         self.markdown_calls.append(str(value))
@@ -669,19 +867,25 @@ class _FakeStreamlit:
     def info(self, value, *_args, **_kwargs):
         self.info_calls.append(str(value))
 
+    def error(self, value, *_args, **_kwargs):
+        self.error_calls.append(str(value))
+
+    def empty(self):
+        return _FakePlaceholder(self)
+
     def table(self, *_args, **_kwargs):
         rows = _args[0] if _args else _kwargs.get("data")
         self.tables.append(rows)
         self.events.append(("table", rows))
 
     def text_input(self, *_args, **_kwargs):
-        return ""
+        return self.ticker
 
     def form(self, *_args, **_kwargs):
         return nullcontext()
 
     def form_submit_button(self, *_args, **_kwargs):
-        return False
+        return self.submitted
 
     def expander(self, title, **kwargs):
         self.expanders.append((title, kwargs))
@@ -696,7 +900,48 @@ class _FakeStreamlit:
         return nullcontext()
 
     def spinner(self, *_args, **_kwargs):
+        self.spinner_labels.append(_args[0] if _args else "")
         return nullcontext()
+
+
+class _FakePlaceholder:
+    def __init__(self, parent):
+        self.parent = parent
+        self.markdown_calls = []
+        self.info_calls = []
+
+    def container(self):
+        return self
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def markdown(self, value, **_kwargs):
+        text = str(value)
+        self.markdown_calls.append(text)
+        self.parent.loading_markdown_calls.append(text)
+        self.parent.markdown_calls.append(text)
+
+    def info(self, value, **_kwargs):
+        text = str(value)
+        self.info_calls.append(text)
+        self.parent.info_calls.append(text)
+
+    def divider(self):
+        self.parent.loading_events.append(("divider",))
+
+    def caption(self, value, **_kwargs):
+        text = str(value)
+        self.parent.loading_caption_calls.append(text)
+        self.parent.loading_events.append(("caption", text))
+        if text != "While you wait":
+            self.parent.loading_messages.append(text)
+
+    def empty(self):
+        self.parent.placeholder_cleared = True
 
 
 if __name__ == "__main__":

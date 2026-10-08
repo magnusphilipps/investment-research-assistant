@@ -1,4 +1,4 @@
-# Investment Research Assistant
+# Stock Checker
 
 A Python application for researching publicly traded companies, with a
 terminal interface and a minimal Streamlit foundation. Enter a ticker symbol
@@ -153,6 +153,15 @@ presentation fields without changing analysis logic. Missing qualitative
 features fail independently, so an unavailable section does not hide the
 others. Feature 10 shows compact source title, publisher/date, and links when
 the report contains those fields.
+
+### Feature 13E — Streamlit UI Polish
+
+Presentation changes stay in the UI and do not touch backend analysis. A CSS
+minimum height helps align assessment cards without truncating driver text, and
+semantic colour classes keep assessment meaning separate from presentation.
+Loading facts are selected locally and add no API cost. The saved report in
+`st.session_state["research_report"]` continues to prevent unnecessary analysis
+reruns.
 
 ---
 

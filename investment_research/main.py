@@ -20,7 +20,22 @@ class ReportBuildError(Exception):
     """Raised when required company or financial data prevents report creation."""
 
 
-def build_report(ticker: str) -> dict[str, Any] | None:
+def get_company_info(ticker: str) -> dict[str, Any] | None:
+    """Fetch the existing company overview once, with report-level error handling."""
+    symbol = ticker.strip().upper()
+    if not symbol:
+        return None
+    try:
+        return fetcher.get_stock_info(symbol)
+    except Exception as error:
+        raise ReportBuildError(f"Could not retrieve data: {error}") from error
+
+
+def build_report(
+    ticker: str,
+    *,
+    preloaded_company: dict[str, Any] | None = None,
+) -> dict[str, Any] | None:
     """Run the existing analysis pipeline once and return its structured results.
 
     Returns None when the ticker does not resolve to a public security. Optional
@@ -30,10 +45,7 @@ def build_report(ticker: str) -> dict[str, Any] | None:
     if not symbol:
         return None
 
-    try:
-        company = fetcher.get_stock_info(symbol)
-    except Exception as error:
-        raise ReportBuildError(f"Could not retrieve data: {error}") from error
+    company = preloaded_company if preloaded_company is not None else get_company_info(symbol)
     if company is None:
         return None
 
