@@ -2,6 +2,7 @@
 
 from html import escape
 from random import choice
+import re
 from typing import Any
 
 from dotenv import load_dotenv
@@ -29,6 +30,41 @@ LOADING_MESSAGES = (
 def _loading_message() -> str:
     """Select a short, local loading message without external calls."""
     return choice(LOADING_MESSAGES)
+
+
+def limit_company_description(description: Any, max_sentences: int = 5) -> Any:
+    """Keep a company description to complete sentences without splitting common abbreviations."""
+    if not isinstance(description, str) or not description.strip():
+        return description
+    if max_sentences <= 0:
+        return ""
+
+    abbreviations = {
+        "al", "approx", "co", "corp", "dr", "e.g", "etc", "i.e", "inc", "jr",
+        "ltd", "mr", "mrs", "ms", "prof", "vs",
+    }
+    boundaries: list[int] = []
+    for match in re.finditer(r"""[.!?]+(?:["'”’)]*)(?=\s+|$)""", description):
+        preceding = description[:match.start() + 1]
+        word_match = re.search(r"[\w.]+$", preceding)
+        raw_word = word_match.group().lower() if word_match else ""
+        word = raw_word.rstrip(".")
+        is_initialism = bool(re.fullmatch(r"(?:[a-z]\.){2,}", raw_word))
+        if match.end() != len(description) and (
+            word in abbreviations
+            or (len(word) == 1 and word.isalpha())
+            or is_initialism
+        ):
+            continue
+        boundaries.append(match.end())
+
+    if len(boundaries) < max_sentences:
+        return description
+    if len(boundaries) == max_sentences:
+        if not description[boundaries[-1]:].strip():
+            return description
+        return description[:boundaries[-1]].rstrip()
+    return description[:boundaries[max_sentences - 1]].rstrip()
 
 
 def _toggle_assessment_evidence(indicator_key: str) -> None:
@@ -144,11 +180,6 @@ ASSESSMENT_STYLES = """
     line-height: 1.35;
 }
 .company-description {
-    display: -webkit-box;
-    -webkit-box-orient: vertical;
-    -webkit-line-clamp: 4;
-    overflow: hidden;
-    line-height: 1.5;
     margin: 0.35rem 0 1rem;
 }
 </style>
@@ -176,6 +207,11 @@ if submitted:
             if company is None and not build_failed:
                 st.error("Ticker not found. Check the symbol and try again.")
             elif company is not None:
+                company_description = limit_company_description(
+                    company.get("description")
+                )
+                if "description" in company:
+                    company["description"] = company_description
                 loading_placeholder = st.empty()
                 _render_loading_company(loading_placeholder, company)
                 try:

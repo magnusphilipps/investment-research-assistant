@@ -612,6 +612,7 @@ class QualitativeDisplayTests(unittest.TestCase):
         description_markup = next(
             markup for markup in with_description.markdown_calls
             if 'class="company-description"' in markup
+            and markup.startswith("<div")
         )
         self.assertIn("&lt;script&gt;", description_markup)
         self.assertNotIn("<script>", description_markup)
@@ -623,6 +624,91 @@ class QualitativeDisplayTests(unittest.TestCase):
             'class="company-description"' in markup
             for markup in without_description.markdown_calls
         ))
+
+    def test_company_description_is_limited_to_five_complete_sentences(self):
+        fake_streamlit = _FakeStreamlit({})
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}):
+            app_globals = runpy.run_path(
+                str(app_path), run_name="feature_13e_sentence_limit_test",
+            )
+        limit_description = app_globals["limit_company_description"]
+
+        three_sentences = "First sentence. Second sentence! Third sentence?"
+        five_sentences = (
+            "First sentence. Second sentence. Third sentence. "
+            "Fourth sentence. Fifth sentence."
+        )
+        six_sentences = f"{five_sentences} Sixth sentence."
+        self.assertEqual(limit_description(three_sentences), three_sentences)
+        self.assertEqual(limit_description(five_sentences), five_sentences)
+        self.assertEqual(limit_description(six_sentences), five_sentences)
+        self.assertEqual(
+            limit_description("Dr. Lee joined Example Inc. It grew. Another result."),
+            "Dr. Lee joined Example Inc. It grew. Another result.",
+        )
+        self.assertEqual(
+            limit_description("U.S. growth is steady. Markets responded."),
+            "U.S. growth is steady. Markets responded.",
+        )
+        self.assertIsNone(limit_description(None))
+
+    def test_loading_and_completed_views_share_prepared_description_without_extra_lookup(self):
+        description = (
+            "First sentence. Second sentence. Third sentence. "
+            "Fourth sentence. Fifth sentence. Sixth sentence."
+        )
+        report = _dashboard_report()
+        report["company"]["description"] = description
+        fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.get_company_info",
+            return_value=report["company"],
+        ) as get_company_info, patch(
+            "investment_research.main.build_report",
+            return_value=report,
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13e_shared_description_test")
+
+        expected = (
+            "First sentence. Second sentence. Third sentence. "
+            "Fourth sentence. Fifth sentence."
+        )
+        get_company_info.assert_called_once_with("AAPL")
+        build_report.assert_called_once_with(
+            "AAPL", preloaded_company=report["company"]
+        )
+        self.assertEqual(report["company"]["description"], expected)
+
+        loading_markup = next(
+            event[1]
+            for event in fake_streamlit.placeholders[0].containers[0].events
+            if event[0] == "markdown"
+        )
+        completed_markup = next(
+            markup for markup in fake_streamlit.markdown_calls
+            if markup.startswith('<div class="company-description">')
+        )
+        expected_markup = expected
+        self.assertIn(expected_markup, loading_markup)
+        self.assertEqual(
+            loading_markup.split('<div class="company-description">', 1)[1].split("</div>", 1)[0],
+            completed_markup.split('<div class="company-description">', 1)[1].split("</div>", 1)[0],
+        )
+        self.assertEqual(completed_markup, f'<div class="company-description">{expected_markup}</div>')
+        self.assertNotIn("Read full company description", str(fake_streamlit.expanders))
+        self.assertFalse(any(
+            "company description" in title.lower()
+            for title, _ in fake_streamlit.expanders
+        ))
+
+        styles = next(
+            markup for markup in fake_streamlit.markdown_calls
+            if ".company-description {" in markup
+        )
+        self.assertNotIn("-webkit-line-clamp", styles)
+        self.assertNotIn("completed-company-description", styles)
 
     def test_loading_message_is_selected_locally_without_provider_calls(self):
         fake_streamlit = _FakeStreamlit(
