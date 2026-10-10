@@ -8,15 +8,19 @@ here makes a future Claude/OpenAI provider swap local to one module.
 from __future__ import annotations
 
 import json
+import logging
 import os
 import re
+import tempfile
 import time
+from pathlib import Path
 from typing import Any
 
 from . import cache
 from .assessment_scoring import is_concise_bullet, validate_qualitative_indicator
 
 
+logger = logging.getLogger(__name__)
 MODEL_NAME = "gemini-3.6-flash"
 UNAVAILABLE_MESSAGE = "AI analysis temporarily unavailable."
 MARKET_UNAVAILABLE_MESSAGE = "Market & industry review temporarily unavailable."
@@ -117,9 +121,38 @@ PEER_DISCOVERY_SCHEMA = {
 BULL_BEAR_SCHEMA = {
     "type": "OBJECT",
     "properties": {
-        "bull_case": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 3},
-        "bear_case": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 3},
-        "swing_factors": {"type": "ARRAY", "items": {"type": "STRING", "maxLength": 90}, "minItems": 3, "maxItems": 3},
+        "bull_case": {
+            "type": "ARRAY",
+            "items": {"type": "STRING", "minLength": 1, "maxLength": 110},
+            "minItems": 3,
+            "maxItems": 3,
+            "description": (
+                "Exactly 3 non-empty strings; each 10-16 words and at most 110 "
+                "characters including spaces and punctuation. Target 90-100 "
+                "characters. Exactly one sentence-ending punctuation mark."
+            ),
+        },
+        "bear_case": {
+            "type": "ARRAY",
+            "items": {"type": "STRING", "minLength": 1, "maxLength": 110},
+            "minItems": 3,
+            "maxItems": 3,
+            "description": (
+                "Exactly 3 non-empty strings; each 10-16 words and at most 110 "
+                "characters including spaces and punctuation. Target 90-100 "
+                "characters. Exactly one sentence-ending punctuation mark."
+            ),
+        },
+        "swing_factors": {
+            "type": "ARRAY",
+            "items": {"type": "STRING", "minLength": 1, "maxLength": 90},
+            "minItems": 3,
+            "maxItems": 3,
+            "description": (
+                "Exactly 3 non-empty strings; each 4-10 words, at most 90 "
+                "characters, with no period, exclamation mark, or question mark."
+            ),
+        },
     },
     "required": ["bull_case", "bear_case", "swing_factors"],
 }
@@ -772,87 +805,299 @@ def generate_market_review(context: dict[str, Any]) -> dict[str, Any]:
     return result
 
 
-def _validate_bull_bear(value: Any) -> dict[str, list[str]] | None:
+def _bull_bear_validation_error(value: Any) -> str | None:
     if not isinstance(value, dict):
+        return f"expected an object, received {type(value).__name__}"
+    expected_fields = {"bull_case", "bear_case", "swing_factors"}
+    missing_fields = expected_fields - set(value)
+    extra_fields = set(value) - expected_fields
+    if missing_fields:
+        return f"missing required fields: {', '.join(sorted(missing_fields))}"
+    if extra_fields:
+        return f"unexpected fields: {', '.join(sorted(extra_fields))}"
+
+    for field in ("bull_case", "bear_case"):
+        items = value[field]
+        if not isinstance(items, list):
+            return f"{field} must be an array, received {type(items).__name__}"
+        if len(items) != 3:
+            return f"{field} has {len(items)} items; exactly 3 required"
+        for index, item in enumerate(items):
+            label = f"{field}[{index}]"
+            if not isinstance(item, str):
+                return f"{label} must be a string, received {type(item).__name__}"
+            if not item.strip():
+                return f"{label} must not be empty"
+            word_count = len(_DASHBOARD_WORD_PATTERN.findall(item))
+            if not 10 <= word_count <= 16:
+                return f"{label} has {word_count} words; required range is 10-16"
+            character_count = len(item.strip())
+            if character_count > 110:
+                return f"{label} has {character_count} characters; maximum is 110"
+            punctuation_count = len(re.findall(r"[.!?]", item))
+            if punctuation_count != 1:
+                return (
+                    f"{label} has {punctuation_count} sentence punctuation marks; "
+                    "exactly 1 required"
+                )
+            if item.rstrip()[-1] not in ".!?":
+                return f"{label} must end with '.', '!', or '?'"
+
+    items = value["swing_factors"]
+    if not isinstance(items, list):
+        return f"swing_factors must be an array, received {type(items).__name__}"
+    if len(items) != 3:
+        return f"swing_factors has {len(items)} items; exactly 3 required"
+    for index, item in enumerate(items):
+        label = f"swing_factors[{index}]"
+        if not isinstance(item, str):
+            return f"{label} must be a string, received {type(item).__name__}"
+        if not item.strip():
+            return f"{label} must not be empty"
+        word_count = len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", item))
+        if not 4 <= word_count <= 10:
+            return f"{label} has {word_count} words; required range is 4-10"
+        character_count = len(item.strip())
+        if character_count > 90:
+            return f"{label} has {character_count} characters; maximum is 90"
+        if re.search(r"[.!?]", item):
+            return f"{label} contains sentence punctuation; none is allowed"
+    return None
+
+
+def _validate_bull_bear(value: Any) -> dict[str, list[str]] | None:
+    if _bull_bear_validation_error(value) is not None:
         return None
     result: dict[str, list[str]] = {}
     for field in ("bull_case", "bear_case"):
         items = value.get(field)
-        if not isinstance(items, list) or len(items) != 3:
-            return None
-        if any(
-            not isinstance(item, str)
-            or not item.strip()
-            or not 10 <= len(_DASHBOARD_WORD_PATTERN.findall(item)) <= 14
-            or len(item.strip()) > 90
-            or len(re.findall(r"[.!?]", item)) != 1
-            or item.rstrip()[-1] not in ".!?"
-            for item in items
-        ):
-            return None
         result[field] = [item.strip() for item in items]
-    items = value.get("swing_factors")
-    if not isinstance(items, list) or len(items) != 3:
-        return None
-    if any(
-        not isinstance(item, str)
-        or not item.strip()
-        or not 4 <= len(re.findall(r"\b[\w]+(?:[-'][\w]+)*\b", item)) <= 10
-        or len(item.strip()) > 90
-        or re.search(r"[.!?]", item)
-        for item in items
-    ):
-        return None
+    items = value["swing_factors"]
     result["swing_factors"] = [item.strip() for item in items]
     return result
 
 
-def _request_bull_bear_model(context: dict[str, Any], api_key: str) -> str:
+def _feature11_debug_enabled() -> bool:
+    return os.environ.get("DEBUG_FEATURE11") == "1"
+
+
+def _feature11_debug(message: str) -> None:
+    if _feature11_debug_enabled():
+        print(f"FEATURE11 DEBUG: {message}")
+    logger.debug("Feature 11: %s", message)
+
+
+def _capture_feature11_response(
+    raw_response: str | None,
+    context: dict[str, Any],
+    attempt: str,
+) -> None:
+    if not _feature11_debug_enabled():
+        return
+    company = context.get("company")
+    ticker = str(
+        company.get("ticker") if isinstance(company, dict) else "unknown"
+    )
+    safe_ticker = re.sub(r"[^A-Za-z0-9_.-]", "_", ticker)[:32]
+    path = Path(tempfile.gettempdir()) / f"feature11-{safe_ticker}-{attempt}.txt"
+    try:
+        path.write_text(raw_response or "", encoding="utf-8")
+    except OSError as error:
+        _feature11_debug(f"{attempt} raw response capture failed ({type(error).__name__})")
+        return
+    text = raw_response or ""
+    _feature11_debug(
+        f"{attempt} raw response captured locally: {path}; "
+        f"characters={len(text)}, bytes={len(text.encode('utf-8'))}, "
+        f"starts_with_fence={text.lstrip().startswith('```')}, "
+        f"ends_with_fence={text.rstrip().endswith('```')}"
+    )
+
+
+def _request_bull_bear_content(prompt: str, api_key: str) -> str:
     from google import genai
     from google.genai import types
 
     client = genai.Client(api_key=api_key)
     response = client.models.generate_content(
         model=MODEL_NAME,
-        contents=(
-            "Create exactly three conditional bull-case arguments, three conditional "
-            "bear-case arguments, and three concise swing factors from ONLY this evidence. "
-            "Bull and bear items must be exactly one sentence and 10-14 words, "
-            "no more than 90 characters, using "
-            "one clear evidence -> business mechanism -> potential implication. "
-            "Swing factors must be 4-10 words, phrased only as variables to monitor. "
-            "Do not use analyst forecasts or metrics as the mechanism itself; use the "
-            "underlying demand, pricing, competition, capacity, execution, or financial "
-            "driver, with forecasts only as supporting evidence. Avoid subordinate clauses, "
-            "deterministic claims, excessive numbers, recommendations, and target prices. "
-            "Use cautious wording such as could, may, or increases exposure to. "
-            "Every bull/bear item must end with one sentence-ending punctuation mark; "
-            "swing factors must not be sentences. Do not provide outside facts.\n\n"
-            + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
-        ),
+        contents=prompt,
         config=types.GenerateContentConfig(
-            system_instruction="Return only the requested grounded JSON structure.",
+            system_instruction=(
+                "Return only one JSON object matching the supplied schema. "
+                "Do not include markdown, fences, or prose."
+            ),
             temperature=0.2,
-            max_output_tokens=4096,
+            max_output_tokens=2048,
+            thinking_config=types.ThinkingConfig(
+                thinking_level=types.ThinkingLevel.MINIMAL
+            ),
             response_mime_type="application/json",
             response_schema=BULL_BEAR_SCHEMA,
         ),
     )
+    if _feature11_debug_enabled():
+        candidates = getattr(response, "candidates", None) or []
+        candidate = candidates[0] if candidates else None
+        usage = getattr(response, "usage_metadata", None)
+        feedback = getattr(response, "prompt_feedback", None)
+        _feature11_debug(
+            "provider response metadata: "
+            f"candidate_count={len(candidates)}, "
+            f"finish_reason={getattr(candidate, 'finish_reason', None)}, "
+            f"prompt_tokens={getattr(usage, 'prompt_token_count', None)}, "
+            f"output_tokens={getattr(usage, 'candidates_token_count', None)}, "
+            f"thinking_tokens={getattr(usage, 'thoughts_token_count', None)}, "
+            f"cached_content_tokens={getattr(usage, 'cached_content_token_count', None)}, "
+            f"total_tokens={getattr(usage, 'total_token_count', None)}, "
+            f"model={MODEL_NAME}, max_output_tokens=2048, "
+            "thinking_level=MINIMAL, thinking_budget=None, "
+            f"prompt_block_reason={getattr(feedback, 'block_reason', None)}"
+        )
     return str(getattr(response, "text", "") or "")
+
+
+def _request_bull_bear_model(context: dict[str, Any], api_key: str) -> str:
+    """Request the primary Feature 11 response with its existing methodology."""
+    prompt = (
+        "Create exactly three conditional bull-case arguments, three conditional "
+        "bear-case arguments, and three concise swing factors from ONLY this evidence. "
+        "Return exactly the keys bull_case, bear_case, and swing_factors, with no "
+        "additional keys. Each case array must contain exactly 3 non-empty strings. "
+        "Count words as dashboard tokens: letters/digits/underscores grouped together, "
+        "with internal hyphens or apostrophes joining one token. Each bull_case and "
+        "bear_case string must be 10-16 such words and no more than 110 characters, "
+        "counting every letter, space, and punctuation mark. Count the characters "
+        "before returning each bullet; target 90-100 characters for margin and rewrite "
+        "any bullet over 100 characters. Each case bullet must be one sentence, ending "
+        "in exactly one period, exclamation mark, or question mark. Each "
+        "swing_factors string must be 4-10 words using the same word definition, at "
+        "most 90 characters, and contain no period, exclamation mark, or question mark. "
+        "Use one clear evidence -> business mechanism -> potential implication. "
+        "Do not use analyst forecasts or metrics as the mechanism itself; use the "
+        "underlying demand, pricing, competition, capacity, execution, or financial "
+        "driver, with forecasts only as supporting evidence. Avoid subordinate clauses, "
+        "deterministic claims, excessive numbers, recommendations, and target prices. "
+        "Use cautious wording such as could, may, or increases exposure to. Do not "
+        "provide outside facts.\n\n"
+        + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+    )
+    return _request_bull_bear_content(prompt, api_key)
+
+
+def _request_bull_bear_repair_model(
+    context: dict[str, Any],
+    api_key: str,
+    invalid_response: str,
+) -> str:
+    """Repair one invalid Feature 11 response using only the original evidence."""
+    prompt = (
+        "The previous output failed the required schema. Repair its formatting and "
+        "constraints without changing the analytical methodology or adding evidence. "
+        "Use ONLY the supplied context; do no web research and add no outside facts. "
+        "Return ONLY one valid JSON object with exactly these keys and no others: "
+        '{"bull_case":[three strings],"bear_case":[three strings],'
+        '"swing_factors":[three strings]}. Each case array must contain exactly 3 '
+        "non-empty strings. Count words as dashboard tokens: letters/digits/underscores "
+        "grouped together, with internal hyphens or apostrophes joining one token. "
+        "Each case string must be 10-16 such words and no more than 110 characters, "
+        "counting every letter, space, and punctuation mark. Count each bullet's "
+        "characters before returning; target 90-100 characters for margin and rewrite "
+        "any bullet over 100 characters. Each case bullet must be one sentence, ending "
+        "in exactly one period, exclamation mark, or question mark. Each "
+        "swing factor must be 4-10 such words, at most 90 "
+        "characters, and contain no period, exclamation mark, or question mark. "
+        "No markdown, code fences, or prose.\n\n"
+        "Evidence context:\n"
+        + json.dumps(context, ensure_ascii=False, separators=(",", ":"))
+        + "\n\nPrevious invalid output:\n"
+        + invalid_response[:4_000]
+    )
+    return _request_bull_bear_content(prompt, api_key)
+
+
+def _parse_bull_bear_response(
+    raw_response: str | None,
+    attempt: str,
+) -> dict[str, list[str]] | None:
+    if not raw_response or not raw_response.strip():
+        _feature11_debug(f"{attempt}: response empty")
+        return None
+    _feature11_debug(f"{attempt}: response non-empty ({len(raw_response)} characters)")
+    try:
+        decoded = json.loads(raw_response)
+    except (TypeError, ValueError) as error:
+        if isinstance(error, json.JSONDecodeError):
+            reason = (
+                f"{error.msg} (line {error.lineno}, column {error.colno}, "
+                f"character {error.pos})"
+            )
+        else:
+            reason = f"{type(error).__name__}: {error}"
+        _feature11_debug(f"{attempt}: JSON parsing failed: {reason}")
+        return None
+    _feature11_debug(f"{attempt}: JSON parsing succeeded")
+    validation_error = _bull_bear_validation_error(decoded)
+    if validation_error is not None:
+        _feature11_debug(f"{attempt}: schema validation failed: {validation_error}")
+        return None
+    _feature11_debug(f"{attempt}: schema validation succeeded")
+    validated = _validate_bull_bear(decoded)
+    return validated
 
 
 def generate_bull_bear(context: dict[str, Any]) -> dict[str, Any]:
     """Generate validated Feature 11 scenario analysis or a safe unavailable result."""
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
+        _feature11_debug("API key unavailable; no request made")
         return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
-    raw_response = _request_with_retry(lambda: _request_bull_bear_model(context, api_key), "FEATURE 11")
-    if not raw_response:
-        return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
+
+    _feature11_debug("cache checked")
+    cached = cache.read("feature-11", context)
+    if isinstance(cached, dict) and cached.get("status") == "ok":
+        cached_analysis = _validate_bull_bear(cached.get("analysis"))
+        if cached_analysis is not None:
+            _feature11_debug("cache hit")
+            return {"status": "ok", "message": None, "analysis": cached_analysis}
+    _feature11_debug("cache miss")
+
     try:
-        analysis = _validate_bull_bear(json.loads(raw_response))
-    except (TypeError, ValueError):
-        analysis = None
-    if analysis is None:
+        raw_response = _request_bull_bear_model(context, api_key)
+    except Exception:
+        _feature11_debug("primary request raised provider exception")
+        logger.debug("Feature 11 primary Gemini request failed", exc_info=True)
         return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
-    return {"status": "ok", "message": None, "analysis": analysis}
+
+    _feature11_debug("primary request succeeded")
+    _capture_feature11_response(raw_response, context, "primary")
+    analysis = _parse_bull_bear_response(raw_response, "primary")
+    if analysis is None:
+        _feature11_debug("repair triggered")
+        try:
+            repair_response = _request_bull_bear_repair_model(
+                context,
+                api_key,
+                raw_response or "",
+            )
+        except Exception:
+            _feature11_debug("repair request raised provider exception")
+            logger.debug("Feature 11 repair Gemini request failed", exc_info=True)
+            return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
+        _feature11_debug("repair request succeeded")
+        _capture_feature11_response(repair_response, context, "repair")
+        analysis = _parse_bull_bear_response(repair_response, "repair")
+        if analysis is None:
+            _feature11_debug("repair validation failed; returning unavailable")
+            logger.debug("Feature 11 repair failed; returning unavailable result")
+            return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
+        _feature11_debug("repair validation succeeded")
+        logger.debug("Feature 11 repair succeeded")
+
+    result = {"status": "ok", "message": None, "analysis": analysis}
+    _feature11_debug("final status: ok")
+    try:
+        cache.write("feature-11", context, result)
+    except (OSError, TypeError, ValueError):
+        pass
+    return result

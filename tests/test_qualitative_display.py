@@ -677,22 +677,40 @@ class QualitativeDisplayTests(unittest.TestCase):
         search.assert_not_called()
 
     def test_loading_description_precedes_build_and_company_lookup_runs_once(self):
-        company = {
-            "ticker": "AAPL",
-            "name": "Apple Inc.",
-            "description": "Existing company description.",
-            "price": 200,
-            "market_cap": 1_000_000,
+        description = "Existing company description."
+        provider_info = {
+            "symbol": "AAPL",
+            "longName": "Apple Inc.",
+            "quoteType": "EQUITY",
+            "exchange": "NMS",
+            "longBusinessSummary": description,
         }
+
+        class ProviderTicker:
+            info_reads = 0
+
+            @property
+            def info(self):
+                self.info_reads += 1
+                return provider_info
+
+        provider_ticker = ProviderTicker()
         report = _dashboard_report()
+        report["company"]["description"] = description
         fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
         app_path = Path(__file__).resolve().parents[1] / "app.py"
+        preloaded_companies = []
 
         def build_after_loading(ticker, *, preloaded_company):
             self.assertEqual(ticker, "AAPL")
-            self.assertIs(preloaded_company, company)
-            self.assertTrue(any("Existing company description." in value
-                                for value in fake_streamlit.loading_markdown_calls))
+            preloaded_companies.append(preloaded_company)
+            self.assertEqual(preloaded_company["description"], description)
+            placeholder = fake_streamlit.placeholders[0]
+            self.assertEqual(len(placeholder.containers), 1)
+            self.assertIn(
+                description,
+                placeholder.containers[0].events[0][1],
+            )
             self.assertEqual(
                 fake_streamlit.loading_events[-3:][0],
                 ("divider",),
@@ -705,16 +723,23 @@ class QualitativeDisplayTests(unittest.TestCase):
             return report
 
         with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
-            "investment_research.main.get_company_info",
-            return_value=company,
-        ) as lookup, patch(
+            "investment_research.fetcher.yf.Ticker",
+            return_value=provider_ticker,
+        ) as ticker_lookup, patch(
             "investment_research.main.build_report",
             side_effect=build_after_loading,
         ) as build_report:
             runpy.run_path(str(app_path), run_name="feature_13e_loading_description_test")
 
-        lookup.assert_called_once_with("AAPL")
-        build_report.assert_called_once_with("AAPL", preloaded_company=company)
+        ticker_lookup.assert_called_once_with("AAPL")
+        self.assertEqual(provider_ticker.info_reads, 1)
+        build_report.assert_called_once()
+        self.assertEqual(build_report.call_args.args[0], "AAPL")
+        self.assertIs(build_report.call_args.kwargs["preloaded_company"], preloaded_companies[0])
+        self.assertEqual(
+            build_report.call_args.kwargs["preloaded_company"]["description"],
+            description,
+        )
         self.assertTrue(fake_streamlit.placeholder_cleared)
 
     def test_invalid_ticker_does_not_start_report_build(self):
@@ -840,6 +865,7 @@ class _FakeStreamlit:
         self.loading_caption_calls = []
         self.loading_events = []
         self.loading_messages = []
+        self.placeholders = []
 
     def set_page_config(self, **_kwargs):
         self.page_config = _kwargs
@@ -871,7 +897,9 @@ class _FakeStreamlit:
         self.error_calls.append(str(value))
 
     def empty(self):
-        return _FakePlaceholder(self)
+        placeholder = _FakePlaceholder(self)
+        self.placeholders.append(placeholder)
+        return placeholder
 
     def table(self, *_args, **_kwargs):
         rows = _args[0] if _args else _kwargs.get("data")
@@ -909,9 +937,12 @@ class _FakePlaceholder:
         self.parent = parent
         self.markdown_calls = []
         self.info_calls = []
+        self.containers = []
 
     def container(self):
-        return self
+        container = _FakeLoadingContainer(self)
+        self.containers.append(container)
+        return container
 
     def __enter__(self):
         return self
@@ -942,6 +973,37 @@ class _FakePlaceholder:
 
     def empty(self):
         self.parent.placeholder_cleared = True
+
+
+class _FakeLoadingContainer:
+    def __init__(self, placeholder):
+        self.placeholder = placeholder
+        self.events = []
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *_args):
+        return False
+
+    def markdown(self, value, **_kwargs):
+        text = str(value)
+        self.events.append(("markdown", text))
+        self.placeholder.markdown_calls.append(text)
+        self.placeholder.parent.loading_markdown_calls.append(text)
+        self.placeholder.parent.markdown_calls.append(text)
+
+    def divider(self):
+        self.events.append(("divider",))
+        self.placeholder.parent.loading_events.append(("divider",))
+
+    def caption(self, value, **_kwargs):
+        text = str(value)
+        self.events.append(("caption", text))
+        self.placeholder.parent.loading_caption_calls.append(text)
+        self.placeholder.parent.loading_events.append(("caption", text))
+        if text != "While you wait":
+            self.placeholder.parent.loading_messages.append(text)
 
 
 if __name__ == "__main__":

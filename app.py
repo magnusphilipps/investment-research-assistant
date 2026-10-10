@@ -87,17 +87,18 @@ def _render_assessment_evidence(
 
 def _render_loading_company(placeholder: Any, company: dict[str, Any]) -> None:
     description = company.get("description")
-    with placeholder.container():
+    loading_container = placeholder.container()
+    with loading_container:
         if isinstance(description, str) and description.strip():
             name = company.get("name") or company.get("ticker") or "Company"
-            placeholder.markdown(
+            loading_container.markdown(
                 f"**{escape(str(name))}**\n\n"
                 f'<div class="company-description">{escape(description.strip())}</div>',
                 unsafe_allow_html=True,
             )
-            placeholder.divider()
-            placeholder.caption("While you wait")
-        placeholder.caption(_loading_message())
+            loading_container.divider()
+            loading_container.caption("While you wait")
+        loading_container.caption(_loading_message())
 
 
 st.set_page_config(page_title="Stock Checker")
