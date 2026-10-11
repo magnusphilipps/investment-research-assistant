@@ -13,7 +13,7 @@ from investment_research.assessment_display import (
 
 def _report():
     return {
-        "company": {"sector": "Technology", "price": 150.0},
+        "company": {"sector": "Technology", "price": 150.0, "currency": "USD"},
         "assessment": {
             "indicators": {
                 "valuation": {
@@ -249,6 +249,25 @@ class AssessmentEvidenceDisplayTests(unittest.TestCase):
         self.assertEqual(metrics["Analyst Count"], "12")
         self.assertEqual(metrics["Consensus"], "Buy")
         self.assertEqual(evidence["tables"][0]["rows"][1]["Expected Growth"], "N/M")
+
+    def test_price_evidence_preserves_provider_pence_unit(self):
+        report = _report()
+        report["company"]["currency"] = "GBp"
+        report["price_performance"]["range"] = {
+            "current_price": 123.45,
+            "high": 150.0,
+            "low": 100.0,
+        }
+
+        performance = get_indicator_evidence_display(report, "volatility", "Volatility")
+        expectations = get_indicator_evidence_display(report, "expectations", "Expectations")
+        performance_values = {metric["label"]: metric["value"] for metric in performance["metrics"]}
+        expectation_values = {metric["label"]: metric["value"] for metric in expectations["metrics"]}
+
+        self.assertEqual(performance_values["Current Price"], "123.45p")
+        self.assertEqual(performance_values["52-week High"], "150.00p")
+        self.assertEqual(expectation_values["Average Target"], "180.00p")
+        self.assertEqual(expectation_values["Implied Upside"], "20.0%")
 
     def test_missing_values_remain_na_and_hidden_scores_stay_hidden(self):
         report = _report()

@@ -22,7 +22,7 @@ class TestExpectationsStructured(unittest.TestCase):
             index=['0m', '-1m']
         )
         mock_ticker = MagicMock()
-        mock_ticker.info = {}
+        mock_ticker.info = {"currency": "GBp"}
         mock_ticker.recommendations = recs
         mock_ticker.revenue_estimate = pd.DataFrame()
         mock_yf.Ticker.return_value = mock_ticker
@@ -36,6 +36,8 @@ class TestExpectationsStructured(unittest.TestCase):
         self.assertEqual(counts['Sell'], 1)
         self.assertEqual(counts['Strong Sell'], 0)
         self.assertEqual(res['recommendations']['consensus'], 'Buy')
+        self.assertEqual(res["price_targets"]["currency"], "GBp")
+        mock_get_info.assert_called_once_with("NVDA")
 
     @patch("investment_research.fetcher.get_yahoo_info")
     @patch("investment_research.expectations.yf")

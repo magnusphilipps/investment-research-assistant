@@ -58,6 +58,7 @@ def get_analyst_expectations(
     ticker_symbol: str,
     *,
     revenue_stage: str | None = None,
+    currency: str | None = None,
 ) -> Dict[str, Any]:
     """
     Top-level function returning analyst expectations for a ticker.
@@ -126,6 +127,7 @@ def get_analyst_expectations(
         "low_target": low_target,
         "analysts": analysts,
         "implied_upside": implied_upside,
+        "currency": currency or info.get("currency"),
     }
 
     # --- Recommendations: try ticker.recommendations DataFrame if present ---

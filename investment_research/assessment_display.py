@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from typing import Any
 
+from .display import format_market_price
+
 
 ASSESSMENT_INDICATORS = (
     ("valuation", "Valuation"),
@@ -103,6 +105,7 @@ def _format_value(
     *,
     kind: str = "number",
     status: Any = None,
+    currency: str | None = None,
 ) -> str:
     status_text = status.strip().casefold() if isinstance(status, str) else ""
     if status_text in {"not_meaningful", "n/m"} or status_text.startswith("not meaningful"):
@@ -121,7 +124,7 @@ def _format_value(
     if kind == "fraction_percent":
         return f"{number:.1%}"
     if kind == "currency":
-        return f"${number:,.2f}"
+        return format_market_price(number, currency)
     if kind == "money":
         return f"${number:,.0f}"
     if kind == "integer":
@@ -141,10 +144,11 @@ def _add_metric(
     group: str = "",
     kind: str = "number",
     status: Any = None,
+    currency: str | None = None,
 ) -> None:
     evidence["metrics"].append({
         "label": label,
-        "value": _format_value(value, kind=kind, status=status),
+        "value": _format_value(value, kind=kind, status=status, currency=currency),
         "group": group,
     })
 
@@ -398,9 +402,19 @@ def _volatility_evidence(report: Any, evidence: dict[str, Any]) -> None:
             kind="fraction_percent",
         )
     price_range = _as_dict(performance.get("range"))
-    _add_metric(evidence, "Current Price", price_range.get("current_price"), group="52-week range", kind="currency")
-    _add_metric(evidence, "52-week High", price_range.get("high"), group="52-week range", kind="currency")
-    _add_metric(evidence, "52-week Low", price_range.get("low"), group="52-week range", kind="currency")
+    currency = _section(report, "company").get("currency")
+    _add_metric(
+        evidence, "Current Price", price_range.get("current_price"),
+        group="52-week range", kind="currency", currency=currency,
+    )
+    _add_metric(
+        evidence, "52-week High", price_range.get("high"),
+        group="52-week range", kind="currency", currency=currency,
+    )
+    _add_metric(
+        evidence, "52-week Low", price_range.get("low"),
+        group="52-week range", kind="currency", currency=currency,
+    )
 
 
 def _market_evidence(report: Any, evidence: dict[str, Any]) -> None:
@@ -435,6 +449,7 @@ def _competitive_evidence(report: Any, evidence: dict[str, Any]) -> None:
 def _expectations_evidence(report: Any, evidence: dict[str, Any]) -> None:
     expectations = _section(report, "expectations")
     targets = _as_dict(expectations.get("price_targets"))
+    currency = targets.get("currency") or _section(report, "company").get("currency")
     for label, key, kind in (
         ("Current Price", "current_price", "currency"),
         ("Average Target", "average_target", "currency"),
@@ -444,7 +459,10 @@ def _expectations_evidence(report: Any, evidence: dict[str, Any]) -> None:
         ("Implied Upside", "implied_upside", "fraction_percent"),
         ("Analyst Count", "analysts", "integer"),
     ):
-        _add_metric(evidence, label, targets.get(key), group="Price targets", kind=kind)
+        _add_metric(
+            evidence, label, targets.get(key), group="Price targets", kind=kind,
+            currency=currency if kind == "currency" else None,
+        )
 
     recommendations = _as_dict(expectations.get("recommendations"))
     _add_metric(evidence, "Consensus", recommendations.get("consensus"), group="Analyst view")

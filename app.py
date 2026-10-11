@@ -489,7 +489,10 @@ if isinstance(report, dict):
     symbol = report.get("ticker") or ""
     st.subheader(f"{name} ({symbol})")
     header_columns = st.columns(2)
-    header_columns[0].metric("Share Price", display.format_price(company.get("price")))
+    header_columns[0].metric(
+        "Share Price",
+        display.format_market_price(company.get("price"), company.get("currency")),
+    )
     header_columns[1].metric("Market Cap", display.format_market_cap(company.get("market_cap")))
     description = company.get("description")
     if isinstance(description, str) and description.strip():

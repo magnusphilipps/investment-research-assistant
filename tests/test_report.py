@@ -108,6 +108,34 @@ class StructuredReportTests(unittest.TestCase):
         })
         self.assertEqual(report["assessment"], values[-2])
 
+    def test_market_currency_flows_to_targets_without_an_extra_company_lookup(self):
+        from contextlib import ExitStack
+
+        with ExitStack() as stack:
+            self._patch_pipeline(stack)
+            company = {
+                "ticker": "BARC.L",
+                "name": "Barclays PLC",
+                "currency": "GBp",
+            }
+            company_lookup = stack.enter_context(
+                patch("investment_research.main.fetcher.get_stock_info", return_value=company)
+            )
+            expectations_call = stack.enter_context(
+                patch(
+                    "investment_research.main.expectations.get_analyst_expectations",
+                    return_value={"status": "ok"},
+                )
+            )
+            main.build_report("BARC.L")
+
+        company_lookup.assert_called_once_with("BARC.L")
+        expectations_call.assert_called_once_with(
+            "BARC.L",
+            revenue_stage="operating",
+            currency="GBp",
+        )
+
     def test_preloaded_none_does_not_run_later_features(self):
         with patch(
             "investment_research.main.fetcher.get_stock_info",

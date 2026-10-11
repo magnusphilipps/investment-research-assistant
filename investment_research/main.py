@@ -120,6 +120,7 @@ def build_report(
         expectations_data = expectations.get_analyst_expectations(
             symbol,
             revenue_stage=revenue_stage,
+            currency=company.get("currency"),
         )
     except Exception as error:
         if isinstance(error, fetcher.YahooRateLimitError):
@@ -250,7 +251,10 @@ def render_terminal_report(report: dict[str, Any]) -> None:
     if "price_performance" in errors:
         display.print_error(errors["price_performance"])
     else:
-        display.print_performance(report["price_performance"])
+        display.print_performance(
+            report["price_performance"],
+            currency=company.get("currency"),
+        )
 
     if "expectations" in errors:
         display.print_error(errors["expectations"])

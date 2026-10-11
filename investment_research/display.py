@@ -84,6 +84,45 @@ def _is_missing_value(value) -> bool:
     return False
 
 
+_MARKET_CURRENCY_PREFIXES = {
+    "USD": "$",
+    "GBP": "£",
+    "EUR": "€",
+    "JPY": "¥",
+    "CNY": "¥",
+    "CHF": "CHF ",
+    "SGD": "S$",
+    "HKD": "HK$",
+    "INR": "₹",
+    "KRW": "₩",
+    "MXN": "MX$",
+    "BRL": "R$",
+    "SEK": "kr ",
+    "NOK": "kr ",
+    "DKK": "kr ",
+}
+
+
+def format_market_price(value, currency: str | None = None) -> str:
+    """Format a share price in its provider-supplied trading currency or unit."""
+    if isinstance(value, str) and value.strip().upper() in {"N/A", "N/M"}:
+        return value.strip().upper()
+    if _is_missing_value(value):
+        return "N/A"
+
+    number = float(_normalize_zero(value))
+    raw_code = currency.strip() if isinstance(currency, str) else ""
+    code = raw_code.upper()
+    if raw_code == "GBp" or code in {"GBX", "GBPENCE"}:
+        amount = f"{abs(number):,.2f}p"
+    else:
+        decimals = 0 if code in {"JPY", "KRW"} else 2
+        amount = f"{abs(number):,.{decimals}f}"
+        prefix = _MARKET_CURRENCY_PREFIXES.get(code, f"{code} " if code else "")
+        amount = f"{prefix}{amount}"
+    return f"-{amount}" if number < 0 else amount
+
+
 def shorten_description(text: str | None, max_sentences: int = 4, max_chars: int = 400) -> str:
     """Deterministically shorten a long company description.
 
@@ -172,11 +211,7 @@ def print_stock_info(data: dict) -> None:
     print(f"  {data['name']} ({data['ticker']})")
     print(separator)
 
-    # Format the share price. If it's missing, show "N/A".
-    if data["price"] is not None:
-        print(f"  Share Price  :  ${data['price']:,.2f}")
-    else:
-        print(f"  Share Price  :  N/A")
+    print(f"  Share Price  :  {format_market_price(data.get('price'), data.get('currency'))}")
 
     # format_market_cap handles None internally, so we can call it directly.
     market_cap_str = format_market_cap(data["market_cap"])
@@ -270,16 +305,9 @@ def print_company_overview(data: dict) -> None:
 # ------------------------------------------------------------
 
 
-def format_price(value: float | None) -> str:
-    """
-    Format a share price as $x.xx or return "N/A" when missing.
-
-    This small helper keeps presentation logic out of the expectations
-    module — it only receives raw numeric values.
-    """
-    if value is None:
-        return "N/A"
-    return f"${value:,.2f}"
+def format_price(value: float | None, currency: str | None = None) -> str:
+    """Backward-compatible share-price formatter using native currency metadata."""
+    return format_market_price(value, currency)
 
 
 def format_pct_fraction(frac: float | None) -> str:
@@ -325,11 +353,12 @@ def print_analyst_expectations(expectations: dict) -> None:
     # A. Analyst Price Targets
     print("  ANALYST PRICE TARGETS")
     print(sep)
-    print(f"  Current Price                     {format_price(pt.get('current_price'))}")
-    print(f"  Average Target                    {format_price(pt.get('average_target'))}")
-    print(f"  Median Target                     {format_price(pt.get('median_target'))}")
-    print(f"  High Target                       {format_price(pt.get('high_target'))}")
-    print(f"  Low Target                        {format_price(pt.get('low_target'))}")
+    currency = pt.get("currency")
+    print(f"  Current Price                     {format_market_price(pt.get('current_price'), currency)}")
+    print(f"  Average Target                    {format_market_price(pt.get('average_target'), currency)}")
+    print(f"  Median Target                     {format_market_price(pt.get('median_target'), currency)}")
+    print(f"  High Target                       {format_market_price(pt.get('high_target'), currency)}")
+    print(f"  Low Target                        {format_market_price(pt.get('low_target'), currency)}")
     print(f"  Analysts                          {format_count(pt.get('analysts'))}")
     print(f"  Implied Upside                    {format_pct_fraction(pt.get('implied_upside'))}")
 
@@ -1229,11 +1258,6 @@ def print_ratios(ratios: dict, fin: dict) -> None:
     print()
 
 
-def format_price(value: float | None) -> str:
-    """Format a share price, or show ``N/A`` when it is unavailable."""
-    return f"${value:,.2f}" if not _is_missing_value(value) else "N/A"
-
-
 def format_return(value: float | None) -> str:
     """Format a decimal return as a signed percentage."""
     if _is_missing_value(value):
@@ -1253,7 +1277,7 @@ def format_percentage_points(value: float | None) -> str:
     return f"{value * 100:+.1f} pp"
 
 
-def print_performance(performance: dict) -> None:
+def print_performance(performance: dict, currency: str | None = None) -> None:
     """Print historical returns, the 52-week range, and selected benchmark comparison."""
     separator = "-" * 58
     returns = performance.get("returns", {})
@@ -1271,9 +1295,9 @@ def print_performance(performance: dict) -> None:
     print()
     print("  52-WEEK RANGE")
     print(f"  {separator}")
-    print(f"  {'Current Price':<24}{format_price(price_range.get('current_price')):>14}")
-    print(f"  {'52-Week High':<24}{format_price(price_range.get('high')):>14}")
-    print(f"  {'52-Week Low':<24}{format_price(price_range.get('low')):>14}")
+    print(f"  {'Current Price':<24}{format_market_price(price_range.get('current_price'), currency):>14}")
+    print(f"  {'52-Week High':<24}{format_market_price(price_range.get('high'), currency):>14}")
+    print(f"  {'52-Week Low':<24}{format_market_price(price_range.get('low'), currency):>14}")
     print(f"  {'Below 52-Week High':<24}{format_distance(price_range.get('below_high')):>14}")
     print(f"  {'Above 52-Week Low':<24}{format_distance(price_range.get('above_low')):>14}")
 

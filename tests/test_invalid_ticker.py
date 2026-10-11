@@ -17,10 +17,12 @@ class InvalidTickerTests(unittest.TestCase):
                 "longName": "Test Company",
                 "exchange": "LSE",
                 "market": "gb_market",
+                "currency": "GBp",
             }
             result = fetcher.get_stock_info("TEST.L")
         self.assertEqual(result["exchange"], "LSE")
         self.assertEqual(result["market"], "gb_market")
+        self.assertEqual(result["currency"], "GBp")
 
     def test_symbol_only_provider_response_is_not_a_resolved_security(self):
         with patch("investment_research.fetcher.yf.Ticker") as ticker:

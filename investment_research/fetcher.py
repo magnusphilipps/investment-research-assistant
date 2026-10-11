@@ -235,6 +235,7 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
         "name":        name,
         "price":       price,
         "market_cap":  market_cap,
+        "currency":    info.get("currency"),
         # Phase 2
         "sector":      sector,
         "industry":    industry,
