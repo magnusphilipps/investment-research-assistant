@@ -10,7 +10,13 @@ import streamlit as st
 
 load_dotenv(".env")
 
-from investment_research import assessment_display, display, main, qualitative_display
+from investment_research import (
+    assessment_display,
+    display,
+    main,
+    qualitative_display,
+    ticker_resolution,
+)
 
 
 LOADING_MESSAGES = (
@@ -137,6 +143,37 @@ def _render_loading_company(placeholder: Any, company: dict[str, Any]) -> None:
         loading_container.caption(_loading_message())
 
 
+def _build_report_for_ticker(ticker: str) -> None:
+    with st.spinner(f"Checking {ticker}..."):
+        try:
+            company = main.get_company_info(ticker)
+        except main.ReportBuildError:
+            st.error("Could not complete the analysis. Please try again.")
+            return
+
+        if company is None:
+            st.error("Ticker or company not found. Check the symbol or company name and try again.")
+            return
+
+        company_description = limit_company_description(company.get("description"))
+        if "description" in company:
+            company["description"] = company_description
+        loading_placeholder = st.empty()
+        _render_loading_company(loading_placeholder, company)
+        try:
+            report = main.build_report(ticker, preloaded_company=company)
+        except main.ReportBuildError:
+            st.error("Could not complete the analysis. Please try again.")
+            return
+        finally:
+            loading_placeholder.empty()
+
+    if report is not None:
+        st.session_state["research_report"] = report
+    else:
+        st.error("Ticker or company not found. Check the symbol or company name and try again.")
+
+
 st.set_page_config(page_title="Stock Checker")
 st.title("Stock Checker")
 st.write("Research public companies with company, financial, and market context.")
@@ -186,45 +223,45 @@ ASSESSMENT_STYLES = """
 """
 
 with st.form("ticker_analysis_form"):
-    ticker = st.text_input("Ticker", placeholder="e.g. AAPL").strip().upper()
+    ticker = st.text_input("Ticker", placeholder="e.g. AAPL").strip()
     submitted = st.form_submit_button("Analyse")
 
 if submitted:
     st.session_state.pop("research_report", None)
     st.session_state.pop("selected_evidence_indicator", None)
+    st.session_state.pop("ticker_resolution_candidates", None)
     if not ticker:
         st.error("Please enter a ticker symbol.")
     else:
-        report = None
-        build_failed = False
-        with st.spinner(f"Checking {ticker}..."):
-            company = None
-            try:
-                company = main.get_company_info(ticker)
-            except main.ReportBuildError:
-                build_failed = True
-                st.error("Could not complete the analysis. Please try again.")
-            if company is None and not build_failed:
-                st.error("Ticker not found. Check the symbol and try again.")
-            elif company is not None:
-                company_description = limit_company_description(
-                    company.get("description")
-                )
-                if "description" in company:
-                    company["description"] = company_description
-                loading_placeholder = st.empty()
-                _render_loading_company(loading_placeholder, company)
-                try:
-                    report = main.build_report(ticker, preloaded_company=company)
-                except main.ReportBuildError:
-                    build_failed = True
-                    st.error("Could not complete the analysis. Please try again.")
-                finally:
-                    loading_placeholder.empty()
-                if report is not None:
-                    st.session_state["research_report"] = report
-                elif not build_failed:
-                    st.error("Ticker not found. Check the symbol and try again.")
+        try:
+            resolution = ticker_resolution.resolve_security_input(ticker)
+        except ticker_resolution.TickerResolutionError:
+            st.error("Could not look up that ticker or company right now. Please try again.")
+        else:
+            if resolution.status == "resolved" and resolution.ticker:
+                _build_report_for_ticker(resolution.ticker)
+            elif resolution.status == "ambiguous":
+                st.session_state["ticker_resolution_candidates"] = resolution.candidates
+            else:
+                st.error("Ticker or company not found. Check the symbol or company name and try again.")
+
+pending_candidates = st.session_state.get("ticker_resolution_candidates")
+if pending_candidates:
+    selected_candidate = st.selectbox(
+        "Choose a listing",
+        options=pending_candidates,
+        format_func=lambda candidate: " — ".join(
+            part for part in (
+                candidate.ticker,
+                candidate.company_name,
+                candidate.exchange,
+            ) if part
+        ),
+        key="ticker-resolution-selection",
+    )
+    if st.button("Analyse selected listing", key="analyse-selected-listing"):
+        st.session_state.pop("ticker_resolution_candidates", None)
+        _build_report_for_ticker(selected_candidate.ticker)
 
 report = st.session_state.get("research_report")
 if isinstance(report, dict):

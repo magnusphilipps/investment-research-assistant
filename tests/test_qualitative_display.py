@@ -7,6 +7,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from investment_research import qualitative_display
+from investment_research.ticker_resolution import TickerResolution
 
 
 class QualitativeDisplayTests(unittest.TestCase):
@@ -663,6 +664,9 @@ class QualitativeDisplayTests(unittest.TestCase):
         fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
         app_path = Path(__file__).resolve().parents[1] / "app.py"
         with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.ticker_resolution.resolve_security_input",
+            return_value=TickerResolution(status="resolved", ticker="AAPL"),
+        ), patch(
             "investment_research.main.get_company_info",
             return_value=report["company"],
         ) as get_company_info, patch(
@@ -738,6 +742,9 @@ class QualitativeDisplayTests(unittest.TestCase):
         )
         app_path = Path(__file__).resolve().parents[1] / "app.py"
         with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.ticker_resolution.resolve_security_input",
+            return_value=TickerResolution(status="resolved", ticker="AAPL"),
+        ), patch(
             "investment_research.main.get_company_info",
             return_value=report["company"],
         ) as get_company_info, patch(
@@ -832,17 +839,17 @@ class QualitativeDisplayTests(unittest.TestCase):
         fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="NOPE")
         app_path = Path(__file__).resolve().parents[1] / "app.py"
         with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
-            "investment_research.main.get_company_info",
-            return_value=None,
-        ) as lookup, patch(
+            "investment_research.ticker_resolution.resolve_security_input",
+            return_value=TickerResolution(status="not_found"),
+        ), patch("investment_research.main.get_company_info") as lookup, patch(
             "investment_research.main.build_report"
         ) as build_report:
             runpy.run_path(str(app_path), run_name="feature_13e_invalid_ticker_test")
 
-        lookup.assert_called_once_with("NOPE")
+        lookup.assert_not_called()
         build_report.assert_not_called()
         self.assertIn(
-            "Ticker not found. Check the symbol and try again.",
+            "Ticker or company not found. Check the symbol or company name and try again.",
             fake_streamlit.error_calls,
         )
 

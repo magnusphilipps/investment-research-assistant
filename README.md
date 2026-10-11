@@ -291,8 +291,12 @@ Streamlit is a presentation layer; investment logic stays in the backend.
 `investment_research.main.build_report(ticker)` runs the existing analysis
 pipeline once and returns its structured results. Both the terminal interface
 and Streamlit consume that report, so Features 1–12 are not reimplemented in
-the UI. Run the existing terminal app with `python run.py`, or start the
-foundation UI with `streamlit run app.py`.
+the UI. The Streamlit ticker field accepts symbols or company names; Yahoo
+Finance's lightweight symbol-search endpoint resolves listings before the
+existing company validation and report build. Successful resolutions are
+cached locally, and the user chooses when multiple listings match. Run the
+existing terminal app with `python run.py`, or start the foundation UI with
+`streamlit run app.py`.
 
 ## Financial Statement Formulas
 
