@@ -1029,6 +1029,26 @@ class QualitativeDisplayTests(unittest.TestCase):
             fake_streamlit.error_calls,
         )
 
+    def test_app_calls_public_ticker_like_input_helper(self):
+        fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch.object(
+            ticker_resolution,
+            "is_ticker_like_input",
+            wraps=ticker_resolution.is_ticker_like_input,
+        ) as ticker_like_helper, patch(
+            "investment_research.main.get_company_info",
+            return_value=None,
+        ), patch(
+            "investment_research.ticker_resolution.resolve_security_input",
+            return_value=TickerResolution(status="not_found"),
+        ):
+            runpy.run_path(str(app_path), run_name="ticker_like_helper_regression_test")
+
+        ticker_like_helper.assert_called_once_with("AAPL")
+        self.assertTrue(ticker_resolution.is_ticker_like_input("AAPL"))
+        self.assertFalse(ticker_resolution.is_ticker_like_input("Apple Inc."))
+
     def test_canonical_ticker_rate_limit_shows_provider_message_without_search(self):
         fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
         app_path = Path(__file__).resolve().parents[1] / "app.py"
