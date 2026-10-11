@@ -4,19 +4,21 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from dataclasses import dataclass
-import re
 import logging
+import re
+import time
 from threading import Lock
 from typing import Literal
 
 import yfinance as yf
 
-from . import diagnostics
+from . import diagnostics, fetcher
 
 
 MAX_CANDIDATES = 3
 LOGGER = logging.getLogger(__name__)
 _CACHE_MAX_ENTRIES = 256
+_CACHE_TTL_SECONDS = 24 * 60 * 60
 _SCORE_LEAD_RATIO = 1.01
 _SYMBOL_PATTERN = re.compile(r"[A-Z0-9][A-Z0-9.^=-]{0,19}\Z")
 _TICKER_INPUT_PATTERN = re.compile(r"[A-Za-z0-9.^=-]+\Z")
@@ -47,7 +49,7 @@ class _SearchCandidate:
     order: int
 
 
-_resolution_cache: OrderedDict[str, TickerResolution] = OrderedDict()
+_resolution_cache: OrderedDict[str, tuple[float, TickerResolution]] = OrderedDict()
 _cache_lock = Lock()
 
 
@@ -61,7 +63,7 @@ def _cache_key(value: str) -> str:
 
 def _cache_success(key: str, result: TickerResolution) -> None:
     with _cache_lock:
-        _resolution_cache[key] = result
+        _resolution_cache[key] = (time.monotonic() + _CACHE_TTL_SECONDS, result)
         _resolution_cache.move_to_end(key)
         while len(_resolution_cache) > _CACHE_MAX_ENTRIES:
             _resolution_cache.popitem(last=False)
@@ -69,9 +71,16 @@ def _cache_success(key: str, result: TickerResolution) -> None:
 
 def _cached_success(key: str) -> TickerResolution | None:
     with _cache_lock:
-        result = _resolution_cache.get(key)
+        cached = _resolution_cache.get(key)
+        if cached is None:
+            return None
+        expires_at, result = cached
+        if time.monotonic() >= expires_at:
+            del _resolution_cache[key]
+            return None
         if result is not None:
             _resolution_cache.move_to_end(key)
+            LOGGER.info("Ticker resolution cache_hit: input=%s", key)
         return result
 
 
@@ -105,17 +114,22 @@ def _matches_company_name(query: str, company_name: str) -> bool:
 
 def _search_candidates(query: str) -> list[_SearchCandidate]:
     try:
-        quotes = yf.Search(
-            query,
-            max_results=12,
-            news_count=0,
-            lists_count=0,
-            include_cb=False,
-            include_nav_links=False,
-            include_research=False,
-            enable_fuzzy_query=True,
-            timeout=10,
-        ).quotes
+        quotes = fetcher.run_with_rate_limit_retry(
+            lambda: yf.Search(
+                query,
+                max_results=12,
+                news_count=0,
+                lists_count=0,
+                include_cb=False,
+                include_nav_links=False,
+                include_research=False,
+                enable_fuzzy_query=True,
+                timeout=10,
+            ).quotes,
+            "ticker_symbol_search",
+        )
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception as error:
         diagnostics.log_exception(LOGGER, "ticker_symbol_search", error)
         raise TickerResolutionError("Yahoo Finance symbol search failed.") from error
@@ -246,4 +260,11 @@ def resolve_security_input(user_input: str) -> TickerResolution:
         result = TickerResolution(status="resolved", ticker=candidates[0].ticker)
         _cache_success(key, result)
         return result
-    return TickerResolution(status="ambiguous", candidates=candidates)
+    result = TickerResolution(status="ambiguous", candidates=candidates)
+    _cache_success(key, result)
+    return result
+
+
+def is_ticker_like_input(value: str) -> bool:
+    """Return whether input can be checked as a direct Yahoo ticker first."""
+    return bool(_TICKER_INPUT_PATTERN.fullmatch(_normalize_input(value)))

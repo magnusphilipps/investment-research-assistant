@@ -32,6 +32,8 @@ def get_company_info(ticker: str) -> dict[str, Any] | None:
         return None
     try:
         company = fetcher.get_stock_info(symbol)
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception as error:
         diagnostics.log_exception(LOGGER, "company_lookup_provider", error)
         raise ReportBuildError(f"Could not retrieve data: {error}") from error
@@ -62,6 +64,8 @@ def build_report(
 
     try:
         statements = financials.get_financial_statements(symbol)
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception as error:
         diagnostics.log_exception(LOGGER, "financial_statements", error)
         raise ReportBuildError(f"Could not retrieve financial statements: {error}") from error
@@ -73,6 +77,8 @@ def build_report(
     try:
         ratios = financials.get_ratios(symbol, statements)
     except Exception as error:
+        if isinstance(error, fetcher.YahooRateLimitError):
+            raise
         diagnostics.log_exception(LOGGER, "ratios", error)
         ratios = {}
         errors["ratios"] = f"Could not compute financial ratios: {error}"
@@ -84,6 +90,8 @@ def build_report(
     try:
         peer_result = peers.fetch_peer_comparison(symbol)
     except Exception as error:
+        if isinstance(error, fetcher.YahooRateLimitError):
+            raise
         diagnostics.log_exception(LOGGER, "peer_comparison", error)
         errors["peers"] = f"Could not retrieve peer comparison: {error}"
     if isinstance(peer_result, dict) and peer_result.get("available") is False:
@@ -96,6 +104,8 @@ def build_report(
             market=company.get("market"),
         )
     except Exception as error:
+        if isinstance(error, fetcher.YahooRateLimitError):
+            raise
         diagnostics.log_exception(LOGGER, "price_performance", error)
         price_performance = None
         errors["price_performance"] = f"Could not retrieve stock price performance: {error}"
@@ -112,6 +122,8 @@ def build_report(
             revenue_stage=revenue_stage,
         )
     except Exception as error:
+        if isinstance(error, fetcher.YahooRateLimitError):
+            raise
         diagnostics.log_exception(LOGGER, "analyst_expectations", error)
         errors["expectations"] = f"Could not retrieve analyst expectations: {error}"
 

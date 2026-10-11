@@ -11,6 +11,8 @@ from datetime import datetime
 import pandas as pd
 import yfinance as yf
 
+from . import fetcher
+
 
 PERFORMANCE_PERIODS = {
     "1 Month": pd.DateOffset(months=1),
@@ -234,10 +236,13 @@ def _max_drawdown(prices: pd.Series) -> float | None:
 def _history_for_ticker(ticker_symbol: str) -> pd.DataFrame:
     """Download prices and apply Yahoo's earliest known trade date, if given."""
     ticker = yf.Ticker(ticker_symbol)
-    history = ticker.history(
-        period="max",
-        auto_adjust=False,
-        actions=False,
+    history = fetcher.run_with_rate_limit_retry(
+        lambda: ticker.history(
+            period="max",
+            auto_adjust=False,
+            actions=False,
+        ),
+        "price_history",
     )
     cleaned = _clean_history(history)
     if cleaned.empty:
@@ -247,7 +252,13 @@ def _history_for_ticker(ticker_symbol: str) -> pd.DataFrame:
     # the current company existed then. It helps reject rows before Yahoo's
     # known first trade while avoiding an unreliable ticker-specific guess.
     try:
-        first_trade = ticker.get_history_metadata().get("firstTradeDate")
+        metadata = fetcher.run_with_rate_limit_retry(
+            ticker.get_history_metadata,
+            "price_history_metadata",
+        )
+        first_trade = metadata.get("firstTradeDate")
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         first_trade = None
     if first_trade:

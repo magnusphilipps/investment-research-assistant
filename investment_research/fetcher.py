@@ -22,15 +22,80 @@
 # ============================================================
 
 import logging
+import time
+from collections import OrderedDict
+from threading import Lock
+from typing import Any, Callable
 
 import yfinance as yf  # Third-party library for fetching stock data
 
 from . import diagnostics
 
 LOGGER = logging.getLogger(__name__)
+YAHOO_INFO_CACHE_TTL_SECONDS = 60 * 60
+YAHOO_INFO_CACHE_MAX_ENTRIES = 256
+YAHOO_MAX_ATTEMPTS = 3
+YAHOO_RETRY_DELAYS_SECONDS = (1, 2)
+
+
+class YahooRateLimitError(Exception):
+    """Raised when Yahoo Finance remains rate-limited after bounded retries."""
+
+
+_yahoo_info_cache: OrderedDict[str, tuple[float, dict[str, Any]]] = OrderedDict()
+_yahoo_info_cache_lock = Lock()
+
+
+def is_rate_limit_error(error: Exception) -> bool:
+    """Identify Yahoo HTTP 429 and equivalent provider rate-limit errors."""
+    response = getattr(error, "response", None)
+    if getattr(response, "status_code", None) == 429:
+        return True
+    error_text = f"{type(error).__name__} {error}".casefold()
+    return any(
+        marker in error_text
+        for marker in ("too many requests", "http 429", "rate limited", "rate limit")
+    )
+
+
+def run_with_rate_limit_retry(
+    operation: Callable[[], Any],
+    stage: str,
+) -> Any:
+    """Retry only Yahoo rate limits, with at most three total attempts."""
+    for attempt in range(YAHOO_MAX_ATTEMPTS):
+        try:
+            return operation()
+        except Exception as error:
+            if is_not_found_error(error):
+                LOGGER.info("%s invalid_ticker", stage)
+                raise
+            if not is_rate_limit_error(error):
+                diagnostics.log_exception(LOGGER, f"{stage}_provider_error", error)
+                raise
+            LOGGER.warning(
+                "%s yahoo_rate_limited: attempt=%d/%d",
+                stage,
+                attempt + 1,
+                YAHOO_MAX_ATTEMPTS,
+            )
+            if attempt == YAHOO_MAX_ATTEMPTS - 1:
+                raise YahooRateLimitError(
+                    "Yahoo Finance is temporarily rate-limited."
+                ) from error
+            time.sleep(YAHOO_RETRY_DELAYS_SECONDS[attempt])
+    raise RuntimeError("Yahoo retry loop exited unexpectedly.")
+
+
+def clear_yahoo_info_cache() -> None:
+    """Clear cached Yahoo metadata, primarily for deterministic tests."""
+    with _yahoo_info_cache_lock:
+        _yahoo_info_cache.clear()
 
 
 def is_not_found_error(error: Exception) -> bool:
+    if is_rate_limit_error(error):
+        return False
     response = getattr(error, "response", None)
     if getattr(response, "status_code", None) == 404:
         return True
@@ -60,6 +125,42 @@ def is_resolved_security(ticker_symbol: str, info: dict) -> bool:
     return has_company_name or has_equity_listing
 
 
+def get_yahoo_info(ticker_symbol: str) -> dict[str, Any] | None:
+    """Return validated Yahoo ticker metadata, retrying and caching successful lookups."""
+    symbol = ticker_symbol.strip().upper()
+    if not symbol:
+        return None
+
+    now = time.monotonic()
+    with _yahoo_info_cache_lock:
+        cached = _yahoo_info_cache.get(symbol)
+        if cached is not None:
+            expires_at, info = cached
+            if now < expires_at:
+                _yahoo_info_cache.move_to_end(symbol)
+                LOGGER.info("Yahoo company metadata cache_hit: ticker=%s", symbol)
+                return info.copy()
+            del _yahoo_info_cache[symbol]
+
+    LOGGER.info("Yahoo company metadata lookup started: ticker=%s", symbol)
+    ticker = yf.Ticker(symbol)
+    info = run_with_rate_limit_retry(lambda: ticker.info, "yahoo_company_metadata")
+    if not isinstance(info, dict) or not is_resolved_security(symbol, info):
+        LOGGER.warning("Yahoo company metadata invalid_ticker: ticker=%s", symbol)
+        return info if isinstance(info, dict) else None
+
+    with _yahoo_info_cache_lock:
+        _yahoo_info_cache[symbol] = (
+            time.monotonic() + YAHOO_INFO_CACHE_TTL_SECONDS,
+            info.copy(),
+        )
+        _yahoo_info_cache.move_to_end(symbol)
+        while len(_yahoo_info_cache) > YAHOO_INFO_CACHE_MAX_ENTRIES:
+            _yahoo_info_cache.popitem(last=False)
+    LOGGER.info("Yahoo company metadata lookup succeeded: ticker=%s", symbol)
+    return info.copy()
+
+
 def get_stock_info(ticker_symbol: str) -> dict | None:
     """
     Fetch stock and company overview information for a given ticker symbol.
@@ -76,21 +177,16 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
         Returns None if the ticker is invalid or data is unavailable.
     """
 
-    # Create a Ticker object. This does not make a network request yet —
-    # it just prepares yfinance to look up this symbol.
-    ticker = yf.Ticker(ticker_symbol)
-
-    # .info is a property that triggers the actual network request.
-    # It returns a large dictionary of company data from Yahoo Finance.
-    # Importantly, this single call returns ALL the data we need for
-    # both Phase 1 (price) and Phase 2 (overview) — no extra requests.
     try:
-        info = ticker.info
+        info = get_yahoo_info(ticker_symbol)
     except Exception as error:
+        if isinstance(error, YahooRateLimitError):
+            LOGGER.error("Company lookup yahoo_rate_limited: ticker=%s", ticker_symbol)
+            raise
         if is_not_found_error(error):
-            diagnostics.log_exception(LOGGER, "company_lookup_not_found", error)
+            LOGGER.info("Company lookup invalid_ticker: ticker=%s", ticker_symbol)
             return None
-        diagnostics.log_exception(LOGGER, "company_lookup_fetch", error)
+        LOGGER.error("Company lookup provider_error: ticker=%s", ticker_symbol)
         raise
 
     # Yahoo may return the requested symbol even when it has no security record.

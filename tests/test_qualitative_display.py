@@ -5,13 +5,18 @@ import sys
 import unittest
 from contextlib import nullcontext
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
-from investment_research import qualitative_display
+from investment_research import fetcher, qualitative_display, ticker_resolution
 from investment_research.ticker_resolution import TickerResolution
 
 
 class QualitativeDisplayTests(unittest.TestCase):
+    def setUp(self):
+        fetcher.clear_yahoo_info_cache()
+        ticker_resolution.clear_resolution_cache()
+
     def test_company_analysis_sections_use_existing_feature_nine_data(self):
         report = {
             "company_analysis": {
@@ -986,7 +991,9 @@ class QualitativeDisplayTests(unittest.TestCase):
         ) as ticker_lookup, patch(
             "investment_research.main.build_report",
             side_effect=build_after_loading,
-        ) as build_report:
+        ) as build_report, patch(
+            "investment_research.ticker_resolution.yf.Search",
+        ) as symbol_search:
             runpy.run_path(str(app_path), run_name="feature_13e_loading_description_test")
 
         ticker_lookup.assert_called_once_with("AAPL")
@@ -999,6 +1006,7 @@ class QualitativeDisplayTests(unittest.TestCase):
             description,
         )
         self.assertTrue(fake_streamlit.placeholder_cleared)
+        symbol_search.assert_not_called()
 
     def test_invalid_ticker_does_not_start_report_build(self):
         fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="NOPE")
@@ -1006,16 +1014,84 @@ class QualitativeDisplayTests(unittest.TestCase):
         with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
             "investment_research.ticker_resolution.resolve_security_input",
             return_value=TickerResolution(status="not_found"),
-        ), patch("investment_research.main.get_company_info") as lookup, patch(
+        ), patch(
+            "investment_research.main.get_company_info",
+            return_value=None,
+        ) as lookup, patch(
             "investment_research.main.build_report"
         ) as build_report:
             runpy.run_path(str(app_path), run_name="feature_13e_invalid_ticker_test")
 
-        lookup.assert_not_called()
+        lookup.assert_called_once_with("NOPE")
         build_report.assert_not_called()
         self.assertIn(
             "Ticker or company not found. Check the symbol or company name and try again.",
             fake_streamlit.error_calls,
+        )
+
+    def test_canonical_ticker_rate_limit_shows_provider_message_without_search(self):
+        fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="AAPL")
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.get_company_info",
+            side_effect=fetcher.YahooRateLimitError("temporarily rate-limited"),
+        ), patch(
+            "investment_research.ticker_resolution.yf.Search",
+        ) as symbol_search, patch(
+            "investment_research.main.build_report",
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="yahoo_rate_limit_ui_test")
+
+        self.assertIn(
+            "Market data provider is temporarily rate-limited. Please try again shortly.",
+            fake_streamlit.error_calls,
+        )
+        symbol_search.assert_not_called()
+        build_report.assert_not_called()
+
+    def test_non_us_unsuffixed_ticker_searches_once_and_reuses_canonical_lookup(self):
+        fake_streamlit = _FakeStreamlit({}, submitted=True, ticker="BARC")
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        initial_company = {
+            "ticker": "BARC",
+            "name": "Barclays PLC",
+            "country": "United Kingdom",
+        }
+        canonical_company = {
+            "ticker": "BARC.L",
+            "name": "Barclays PLC",
+            "country": "United Kingdom",
+        }
+        search_response = SimpleNamespace(
+            quotes=[
+                {
+                    "symbol": "BARC.L",
+                    "longname": "Barclays PLC",
+                    "quoteType": "EQUITY",
+                    "exchDisp": "London",
+                }
+            ]
+        )
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.get_company_info",
+            side_effect=[initial_company, canonical_company],
+        ) as company_lookup, patch(
+            "investment_research.main.build_report",
+            return_value=None,
+        ) as build_report, patch(
+            "investment_research.ticker_resolution.yf.Search",
+            return_value=search_response,
+        ) as symbol_search:
+            runpy.run_path(str(app_path), run_name="non_us_ticker_resolution_test")
+
+        self.assertEqual(
+            [call.args for call in company_lookup.call_args_list],
+            [("BARC",), ("BARC.L",)],
+        )
+        symbol_search.assert_called_once()
+        build_report.assert_called_once_with(
+            "BARC.L",
+            preloaded_company=canonical_company,
         )
 
     def test_missing_loading_description_shows_only_local_fun_fact(self):

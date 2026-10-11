@@ -16,6 +16,7 @@ from investment_research.ticker_resolution import (
 class TickerResolutionTests(unittest.TestCase):
     def setUp(self):
         ticker_resolution.clear_resolution_cache()
+        ticker_resolution.fetcher.clear_yahoo_info_cache()
 
     def _mock_search(self, quotes):
         return patch(
@@ -51,11 +52,12 @@ class TickerResolutionTests(unittest.TestCase):
     def test_company_name_resolves_when_provider_returns_one_strong_listing(self):
         with self._mock_search([
             self._quote("BARC.L", "Barclays PLC", "London"),
-        ]):
+        ]) as search:
             result = ticker_resolution.resolve_security_input("Barclays")
 
         self.assertEqual(result.status, "resolved")
         self.assertEqual(result.ticker, "BARC.L")
+        search.assert_called_once()
 
     def test_unsuffixed_ticker_prefers_its_unique_market_specific_match(self):
         with self._mock_search([
@@ -279,11 +281,14 @@ class TickerResolutionTests(unittest.TestCase):
         ) as company_lookup, patch(
             "investment_research.main.build_report",
             return_value=None,
-        ) as build_report:
+        ) as build_report, patch(
+            "investment_research.ticker_resolution.yf.Search",
+        ) as search:
             runpy.run_path(str(app_path), run_name="ticker_resolution_selection_test")
 
         company_lookup.assert_called_once_with("BARC.L")
         build_report.assert_called_once_with("BARC.L", preloaded_company=company)
+        search.assert_not_called()
 
 
 if __name__ == "__main__":

@@ -7,8 +7,9 @@ from investment_research import expectations
 
 class TestExpectations(unittest.TestCase):
 
+    @patch("investment_research.fetcher.get_yahoo_info")
     @patch("investment_research.expectations.yf")
-    def test_parses_price_targets_and_upside(self, mock_yf):
+    def test_parses_price_targets_and_upside(self, mock_yf, mock_get_info):
         # Prepare mock Ticker with info containing price and targets
         mock_ticker = MagicMock()
         mock_ticker.info = {
@@ -22,6 +23,7 @@ class TestExpectations(unittest.TestCase):
         # No recommendations DataFrame in this simple test
         mock_ticker.recommendations = pd.DataFrame()
         mock_yf.Ticker.return_value = mock_ticker
+        mock_get_info.return_value = mock_ticker.info
 
         res = expectations.get_analyst_expectations("MOCK")
 
@@ -35,12 +37,14 @@ class TestExpectations(unittest.TestCase):
         self.assertEqual(pt["analysts"], 38)
         self.assertAlmostEqual(pt["implied_upside"], (240.0/200.0) - 1)
 
+    @patch("investment_research.fetcher.get_yahoo_info")
     @patch("investment_research.expectations.yf")
-    def test_handles_missing_data(self, mock_yf):
+    def test_handles_missing_data(self, mock_yf, mock_get_info):
         mock_ticker = MagicMock()
         mock_ticker.info = {}
         mock_ticker.recommendations = pd.DataFrame()
         mock_yf.Ticker.return_value = mock_ticker
+        mock_get_info.return_value = mock_ticker.info
 
         res = expectations.get_analyst_expectations("MISSING")
         pt = res["price_targets"]

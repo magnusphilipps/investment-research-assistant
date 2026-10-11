@@ -6,10 +6,13 @@ from unittest.mock import patch
 import numpy as np
 import pandas as pd
 
-from investment_research import display, peers
+from investment_research import display, fetcher, peers
 
 
 class TestPeerComparison(unittest.TestCase):
+    def setUp(self):
+        fetcher.clear_yahoo_info_cache()
+
 
     def test_target_company_summary_and_correct_pe_direction(self):
         df = pd.DataFrame(

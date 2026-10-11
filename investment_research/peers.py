@@ -52,8 +52,10 @@ def _normalise_ticker(value: Any) -> str | None:
 def _ticker_exists(ticker: str) -> bool:
     """Check whether a ticker resolves with the existing provider data."""
     try:
-        info = (yf.Ticker(ticker).info or {})
+        info = fetcher.get_yahoo_info(ticker) or {}
     except Exception as error:
+        if isinstance(error, fetcher.YahooRateLimitError):
+            raise
         if fetcher.is_not_found_error(error):
             return False
         raise
@@ -330,8 +332,9 @@ def _is_financial_company(ticker: str) -> bool:
     than compare a misleading value.
     """
     try:
-        import yfinance as yf
-        info = yf.Ticker(ticker).info or {}
+        info = fetcher.get_yahoo_info(ticker) or {}
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         info = {}
 

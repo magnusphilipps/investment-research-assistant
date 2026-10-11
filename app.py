@@ -15,6 +15,7 @@ load_dotenv(".env")
 from investment_research import (
     assessment_display,
     display,
+    fetcher,
     main,
     qualitative_display,
     ticker_resolution,
@@ -175,19 +176,30 @@ def _render_loading_company(placeholder: Any, company: dict[str, Any]) -> None:
         loading_container.caption(_loading_message())
 
 
-def _build_report_for_ticker(ticker: str) -> None:
-    LOGGER.info("Company lookup started: ticker=%s", ticker)
+def _build_report_for_ticker(
+    ticker: str,
+    preloaded_company: dict[str, Any] | None = None,
+) -> None:
     with st.spinner(f"Checking {ticker}..."):
-        try:
-            company = main.get_company_info(ticker)
-        except main.ReportBuildError as error:
-            diagnostics.log_exception(LOGGER, "company_lookup", error)
-            LOGGER.info("Company lookup failed: ticker=%s", ticker)
-            st.error("Could not complete the analysis. Please try again.")
-            return
-        except Exception as error:
-            diagnostics.log_exception(LOGGER, "company_lookup", error)
-            raise
+        company = preloaded_company
+        if company is None:
+            LOGGER.info("Company lookup started: ticker=%s", ticker)
+            try:
+                company = main.get_company_info(ticker)
+            except fetcher.YahooRateLimitError as error:
+                diagnostics.log_exception(LOGGER, "company_lookup_yahoo_rate_limited", error)
+                st.error("Market data provider is temporarily rate-limited. Please try again shortly.")
+                return
+            except main.ReportBuildError as error:
+                diagnostics.log_exception(LOGGER, "company_lookup", error)
+                LOGGER.info("Company lookup failed: ticker=%s", ticker)
+                st.error("Could not complete the analysis. Please try again.")
+                return
+            except Exception as error:
+                diagnostics.log_exception(LOGGER, "company_lookup", error)
+                raise
+        else:
+            LOGGER.info("Company lookup reused: ticker=%s source=preloaded", ticker)
 
         if company is None:
             LOGGER.warning("Company lookup returned None: ticker=%s", ticker)
@@ -208,6 +220,10 @@ def _build_report_for_ticker(ticker: str) -> None:
         LOGGER.info("Report build started: ticker=%s", ticker)
         try:
             report = main.build_report(ticker, preloaded_company=company)
+        except fetcher.YahooRateLimitError as error:
+            diagnostics.log_exception(LOGGER, "report_build_yahoo_rate_limited", error)
+            st.error("Market data provider is temporarily rate-limited. Please try again shortly.")
+            return
         except main.ReportBuildError as error:
             diagnostics.log_exception(LOGGER, "report_build", error)
             LOGGER.info("Report build raised ReportBuildError: ticker=%s", ticker)
@@ -329,35 +345,119 @@ if submitted:
         LOGGER.info("User-facing error written: empty_ticker")
         st.error("Please enter a ticker symbol.")
     else:
-        LOGGER.info("Ticker resolution started: input=%r", ticker)
-        try:
-            resolution = ticker_resolution.resolve_security_input(ticker)
-        except ticker_resolution.TickerResolutionError as error:
-            diagnostics.log_exception(LOGGER, "ticker_resolution", error)
-            LOGGER.info("User-facing error written: ticker_resolution_failed")
-            st.error("Could not look up that ticker or company right now. Please try again.")
-        except Exception as error:
-            diagnostics.log_exception(LOGGER, "ticker_resolution", error)
-            raise
-        else:
-            LOGGER.info(
-                "Ticker resolution returned: status=%s canonical_ticker=%s candidate_count=%s",
-                resolution.status,
-                resolution.ticker if resolution.status == "resolved" else None,
-                len(resolution.candidates) if resolution.status == "ambiguous" else 0,
-            )
-            if resolution.status == "resolved" and resolution.ticker:
-                _build_report_for_ticker(resolution.ticker)
-            elif resolution.status == "ambiguous":
-                st.session_state["ticker_resolution_candidates"] = resolution.candidates
-                LOGGER.info(
-                    "Session state candidates written: candidate_count=%d",
-                    len(resolution.candidates),
+        preloaded_company = None
+        resolved_directly = False
+        if ticker_resolution.is_ticker_like_input(ticker) and not any(
+            separator in ticker for separator in (".", "-", "^", "=")
+        ):
+            LOGGER.info("Direct ticker validation started: input=%r", ticker)
+            try:
+                preloaded_company = main.get_company_info(ticker.upper())
+            except fetcher.YahooRateLimitError as error:
+                diagnostics.log_exception(
+                    LOGGER, "company_lookup_yahoo_rate_limited", error
                 )
+                st.error(
+                    "Market data provider is temporarily rate-limited. "
+                    "Please try again shortly."
+                )
+                resolved_directly = True
+            except main.ReportBuildError as error:
+                diagnostics.log_exception(LOGGER, "company_lookup", error)
+                st.error("Could not complete the analysis. Please try again.")
+                resolved_directly = True
+
+            if preloaded_company is not None:
+                country = str(preloaded_company.get("country") or "").strip().casefold()
+                is_non_us_company = bool(country) and country not in {
+                    "us",
+                    "usa",
+                    "united states",
+                    "united states of america",
+                }
+                if is_non_us_company:
+                    LOGGER.info(
+                        "Direct ticker validation found non-US company; "
+                        "resolving listing: ticker=%s",
+                        ticker.upper(),
+                    )
+                else:
+                    LOGGER.info(
+                        "Direct ticker validation succeeded: ticker=%s country=%s",
+                        ticker.upper(),
+                        country or "unknown",
+                    )
+                    _build_report_for_ticker(ticker.upper(), preloaded_company)
+                    resolved_directly = True
+            elif not resolved_directly:
+                LOGGER.info(
+                    "Direct ticker validation returned invalid_ticker: input=%r",
+                    ticker,
+                )
+
+        if not resolved_directly:
+            LOGGER.info("Ticker resolution started: input=%r", ticker)
+            try:
+                resolution = ticker_resolution.resolve_security_input(ticker)
+            except fetcher.YahooRateLimitError as error:
+                diagnostics.log_exception(
+                    LOGGER, "ticker_resolution_yahoo_rate_limited", error
+                )
+                st.error(
+                    "Market data provider is temporarily rate-limited. "
+                    "Please try again shortly."
+                )
+            except ticker_resolution.TickerResolutionError as error:
+                diagnostics.log_exception(LOGGER, "ticker_resolution", error)
+                LOGGER.info("User-facing error written: ticker_resolution_failed")
+                st.error(
+                    "Could not look up that ticker or company right now. Please try again."
+                )
+            except Exception as error:
+                diagnostics.log_exception(LOGGER, "ticker_resolution", error)
+                raise
             else:
-                LOGGER.info("Ticker resolution not_found: input=%r", ticker)
-                LOGGER.info("User-facing error written: ticker_not_found")
-                st.error("Ticker or company not found. Check the symbol or company name and try again.")
+                LOGGER.info(
+                    "Ticker resolution returned: status=%s canonical_ticker=%s "
+                    "candidate_count=%s",
+                    resolution.status,
+                    resolution.ticker if resolution.status == "resolved" else None,
+                    len(resolution.candidates) if resolution.status == "ambiguous" else 0,
+                )
+                if resolution.status == "resolved" and resolution.ticker:
+                    reusable_company = (
+                        preloaded_company
+                        if preloaded_company is not None
+                        and resolution.ticker.upper()
+                        == str(preloaded_company.get("ticker", "")).upper()
+                        else None
+                    )
+                    _build_report_for_ticker(resolution.ticker, reusable_company)
+                elif resolution.status == "ambiguous":
+                    st.session_state["ticker_resolution_candidates"] = (
+                        resolution.candidates
+                    )
+                    LOGGER.info(
+                        "Session state candidates written: candidate_count=%d",
+                        len(resolution.candidates),
+                    )
+                elif preloaded_company is not None:
+                    LOGGER.warning(
+                        "Ticker resolution returned not_found, retaining validated "
+                        "ticker: ticker=%s",
+                        preloaded_company.get("ticker"),
+                    )
+                    _build_report_for_ticker(
+                        str(preloaded_company.get("ticker") or ticker.upper()),
+                        preloaded_company,
+                    )
+                else:
+                    LOGGER.info("Ticker resolution not_found: input=%r", ticker)
+                    LOGGER.info("User-facing error written: ticker_not_found")
+                    st.error(
+                        "Ticker or company not found. Check the symbol or company name "
+                        "and try again."
+                    )
 
 pending_candidates = st.session_state.get("ticker_resolution_candidates")
 if pending_candidates:

@@ -38,6 +38,8 @@
 import yfinance as yf   # Third-party: fetches financial data
 import pandas as pd     # Third-party: DataFrames returned by yfinance
 
+from . import fetcher
+
 
 # ------------------------------------------------------------
 # Currency symbol lookup
@@ -546,7 +548,9 @@ def get_financial_statements(ticker_symbol: str) -> dict | None:
     # .info is needed for the reporting currency.
     # We tolerate failure here — currency will fall back to USD.
     try:
-        info = ticker.info or {}
+        info = fetcher.get_yahoo_info(ticker_symbol) or {}
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         info = {}
 
@@ -559,17 +563,32 @@ def get_financial_statements(ticker_symbol: str) -> dict | None:
     # that a missing statement (e.g. ETFs have no income statement)
     # does not prevent the others from loading.
     try:
-        income_df = ticker.financials      # Annual income statement
+        income_df = fetcher.run_with_rate_limit_retry(
+            lambda: ticker.financials,
+            "financial_statements_income",
+        )
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         income_df = None
 
     try:
-        balance_df = ticker.balance_sheet  # Annual balance sheet
+        balance_df = fetcher.run_with_rate_limit_retry(
+            lambda: ticker.balance_sheet,
+            "financial_statements_balance",
+        )
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         balance_df = None
 
     try:
-        cashflow_df = ticker.cashflow      # Annual cash flow
+        cashflow_df = fetcher.run_with_rate_limit_retry(
+            lambda: ticker.cashflow,
+            "financial_statements_cashflow",
+        )
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         cashflow_df = None
 
@@ -700,7 +719,9 @@ def get_ratios(ticker_symbol: str, fin: dict) -> dict:
     #   priceToBook      — market price / book value per share
 
     try:
-        info = yf.Ticker(ticker_symbol).info or {}
+        info = fetcher.get_yahoo_info(ticker_symbol) or {}
+    except fetcher.YahooRateLimitError:
+        raise
     except Exception:
         info = {}
 

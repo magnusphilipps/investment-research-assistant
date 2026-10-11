@@ -7,6 +7,9 @@ from investment_research import assessment, fetcher, main, peers
 
 
 class InvalidTickerTests(unittest.TestCase):
+    def setUp(self):
+        fetcher.clear_yahoo_info_cache()
+
     def test_company_metadata_includes_exchange_and_market_for_feature5(self):
         with patch("investment_research.fetcher.yf.Ticker") as ticker:
             ticker.return_value.info = {
@@ -45,6 +48,68 @@ class InvalidTickerTests(unittest.TestCase):
         with patch("investment_research.fetcher.yf.Ticker", return_value=ProviderTicker()):
             with self.assertRaisesRegex(RuntimeError, "provider unavailable"):
                 fetcher.get_stock_info("AAPL")
+
+    def test_yahoo_rate_limit_retries_once_then_company_lookup_succeeds(self):
+        provider_info = {
+            "symbol": "AAPL",
+            "longName": "Apple Inc.",
+            "quoteType": "EQUITY",
+            "exchange": "NMS",
+        }
+
+        class ProviderTicker:
+            info_reads = 0
+
+            @property
+            def info(self):
+                self.info_reads += 1
+                if self.info_reads == 1:
+                    raise RuntimeError("Too Many Requests. Rate limited.")
+                return provider_info
+
+        provider_ticker = ProviderTicker()
+        with patch(
+            "investment_research.fetcher.yf.Ticker",
+            return_value=provider_ticker,
+        ), patch("investment_research.fetcher.time.sleep") as sleep:
+            company = fetcher.get_stock_info("AAPL")
+
+        self.assertEqual(company["name"], "Apple Inc.")
+        self.assertEqual(provider_ticker.info_reads, 2)
+        sleep.assert_called_once_with(1)
+
+    def test_persistent_yahoo_rate_limit_is_not_invalid_ticker(self):
+        class ProviderTicker:
+            @property
+            def info(self):
+                raise RuntimeError("HTTP 429 Too Many Requests")
+
+        with patch(
+            "investment_research.fetcher.yf.Ticker",
+            return_value=ProviderTicker(),
+        ), patch("investment_research.fetcher.time.sleep") as sleep:
+            with self.assertRaises(fetcher.YahooRateLimitError):
+                main.get_company_info("AAPL")
+
+        self.assertEqual(
+            [call.args for call in sleep.call_args_list],
+            [(1,), (2,)],
+        )
+
+    def test_successful_company_metadata_cache_avoids_repeat_yahoo_request(self):
+        provider_info = {
+            "symbol": "AAPL",
+            "longName": "Apple Inc.",
+            "quoteType": "EQUITY",
+            "exchange": "NMS",
+        }
+        with patch("investment_research.fetcher.yf.Ticker") as ticker:
+            ticker.return_value.info = provider_info
+            first = fetcher.get_stock_info("AAPL")
+            second = fetcher.get_stock_info("aapl")
+
+        self.assertEqual(first, second)
+        ticker.assert_called_once_with("AAPL")
 
     def test_fake_ticker_exits_before_any_analysis_features(self):
         downstream_paths = (

@@ -21,6 +21,8 @@ from typing import Any, Dict, Optional
 
 import math
 import yfinance as yf
+
+from . import fetcher
 import pandas as pd
 
 
@@ -83,7 +85,7 @@ def get_analyst_expectations(
     ticker = yf.Ticker(ticker_symbol)
 
     # --- info dictionary: lightweight single-call snapshot -------------
-    info = getattr(ticker, "info", {}) or {}
+    info = fetcher.get_yahoo_info(ticker_symbol) or {}
 
     # Current share price: try a couple of common keys
     current_price = (
@@ -130,7 +132,15 @@ def get_analyst_expectations(
     recommendations = {k: None for k in ("Strong Buy", "Buy", "Hold", "Sell", "Strong Sell")}
     consensus = None
 
-    recs_df = getattr(ticker, "recommendations", None)
+    try:
+        recs_df = fetcher.run_with_rate_limit_retry(
+            lambda: getattr(ticker, "recommendations", None),
+            "analyst_recommendations",
+        )
+    except fetcher.YahooRateLimitError:
+        raise
+    except Exception:
+        recs_df = None
     try:
         if isinstance(recs_df, pd.DataFrame) and not recs_df.empty:
             # --- Preferred path: structured count columns are available ---
@@ -267,7 +277,10 @@ def get_analyst_expectations(
     #    with rows labelled like '0q', '+1q', '0y' (current fiscal year) and '+1y' (next year).
     #    When present, prefer these structured estimates and access rows by index label.
     try:
-        revenue_df = getattr(ticker, "revenue_estimate", None)
+        revenue_df = fetcher.run_with_rate_limit_retry(
+            lambda: getattr(ticker, "revenue_estimate", None),
+            "analyst_revenue_estimates",
+        )
         if isinstance(revenue_df, pd.DataFrame) and not revenue_df.empty:
             # Helper to safely get a row by exact index label (case-insensitive fallback).
             def _safe_get_row(label: str):
@@ -275,6 +288,8 @@ def get_analyst_expectations(
                 try:
                     if label in revenue_df.index:
                         return revenue_df.loc[label]
+                except fetcher.YahooRateLimitError:
+                    raise
                 except Exception:
                     # ignore and try string-based matching below
                     pass

@@ -7,8 +7,9 @@ from investment_research import display, expectations
 
 class TestExpectationsStructured(unittest.TestCase):
 
+    @patch("investment_research.fetcher.get_yahoo_info")
     @patch("investment_research.expectations.yf")
-    def test_structured_recommendations_parsed(self, mock_yf):
+    def test_structured_recommendations_parsed(self, mock_yf, mock_get_info):
         # Mock recommendations DataFrame with structured count columns
         recs = pd.DataFrame(
             {
@@ -25,6 +26,7 @@ class TestExpectationsStructured(unittest.TestCase):
         mock_ticker.recommendations = recs
         mock_ticker.revenue_estimate = pd.DataFrame()
         mock_yf.Ticker.return_value = mock_ticker
+        mock_get_info.return_value = mock_ticker.info
 
         res = expectations.get_analyst_expectations('NVDA')
         counts = res['recommendations']['counts']
@@ -35,8 +37,9 @@ class TestExpectationsStructured(unittest.TestCase):
         self.assertEqual(counts['Strong Sell'], 0)
         self.assertEqual(res['recommendations']['consensus'], 'Buy')
 
+    @patch("investment_research.fetcher.get_yahoo_info")
     @patch("investment_research.expectations.yf")
-    def test_revenue_estimate_parsing(self, mock_yf):
+    def test_revenue_estimate_parsing(self, mock_yf, mock_get_info):
         # Mock revenue_estimate DataFrame with '0y' and '+1y' rows
         rev = pd.DataFrame(
             {
@@ -50,6 +53,7 @@ class TestExpectationsStructured(unittest.TestCase):
         mock_ticker.recommendations = pd.DataFrame()
         mock_ticker.revenue_estimate = rev
         mock_yf.Ticker.return_value = mock_ticker
+        mock_get_info.return_value = mock_ticker.info
 
         res = expectations.get_analyst_expectations('NVDA')
         cy = res['revenue_estimates']['current_year']
@@ -60,8 +64,11 @@ class TestExpectationsStructured(unittest.TestCase):
         self.assertAlmostEqual(ny['growth'], 0.44)
         self.assertEqual(ny['growth_status'], "available")
 
+    @patch("investment_research.fetcher.get_yahoo_info")
     @patch("investment_research.expectations.yf")
-    def test_pre_revenue_growth_estimates_are_not_meaningful_not_zero_or_unavailable(self, mock_yf):
+    def test_pre_revenue_growth_estimates_are_not_meaningful_not_zero_or_unavailable(
+        self, mock_yf, mock_get_info
+    ):
         mock_ticker = MagicMock()
         mock_ticker.info = {
             "earningsTrend": {
@@ -74,6 +81,7 @@ class TestExpectationsStructured(unittest.TestCase):
         mock_ticker.recommendations = pd.DataFrame()
         mock_ticker.revenue_estimate = pd.DataFrame()
         mock_yf.Ticker.return_value = mock_ticker
+        mock_get_info.return_value = mock_ticker.info
 
         result = expectations.get_analyst_expectations("OKLO", revenue_stage="pre_revenue")
         estimates = result["revenue_estimates"]
