@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from . import assessment
@@ -14,6 +15,9 @@ from . import market_research
 from . import news
 from . import peers
 from . import performance
+from . import diagnostics
+
+LOGGER = logging.getLogger(__name__)
 
 
 class ReportBuildError(Exception):
@@ -24,11 +28,16 @@ def get_company_info(ticker: str) -> dict[str, Any] | None:
     """Fetch the existing company overview once, with report-level error handling."""
     symbol = ticker.strip().upper()
     if not symbol:
+        LOGGER.warning("Company lookup skipped: empty ticker")
         return None
     try:
-        return fetcher.get_stock_info(symbol)
+        company = fetcher.get_stock_info(symbol)
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "company_lookup_provider", error)
         raise ReportBuildError(f"Could not retrieve data: {error}") from error
+    if company is None:
+        LOGGER.warning("Company lookup provider returned None: ticker=%s", symbol)
+    return company
 
 
 def build_report(
@@ -43,23 +52,28 @@ def build_report(
     """
     symbol = ticker.strip().upper()
     if not symbol:
+        LOGGER.warning("Report build skipped: empty ticker")
         return None
 
     company = preloaded_company if preloaded_company is not None else get_company_info(symbol)
     if company is None:
+        LOGGER.warning("Report build stopped: company lookup returned None ticker=%s", symbol)
         return None
 
     try:
         statements = financials.get_financial_statements(symbol)
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "financial_statements", error)
         raise ReportBuildError(f"Could not retrieve financial statements: {error}") from error
     if statements is None:
+        LOGGER.warning("Financial statements returned None: ticker=%s", symbol)
         raise ReportBuildError("Financial statement data unavailable for this ticker.")
 
     errors: dict[str, str] = {}
     try:
         ratios = financials.get_ratios(symbol, statements)
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "ratios", error)
         ratios = {}
         errors["ratios"] = f"Could not compute financial ratios: {error}"
 
@@ -70,7 +84,10 @@ def build_report(
     try:
         peer_result = peers.fetch_peer_comparison(symbol)
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "peer_comparison", error)
         errors["peers"] = f"Could not retrieve peer comparison: {error}"
+    if isinstance(peer_result, dict) and peer_result.get("available") is False:
+        LOGGER.warning("Peer comparison unavailable: ticker=%s", symbol)
 
     try:
         price_performance = performance.get_performance(
@@ -79,9 +96,11 @@ def build_report(
             market=company.get("market"),
         )
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "price_performance", error)
         price_performance = None
         errors["price_performance"] = f"Could not retrieve stock price performance: {error}"
     if price_performance is None and "price_performance" not in errors:
+        LOGGER.warning("Price performance returned None: ticker=%s", symbol)
         errors["price_performance"] = "Stock price performance data unavailable for this ticker."
 
     expectations_data = {}
@@ -93,16 +112,20 @@ def build_report(
             revenue_stage=revenue_stage,
         )
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "analyst_expectations", error)
         errors["expectations"] = f"Could not retrieve analyst expectations: {error}"
 
     try:
         news_result = news.get_company_news(symbol)
-    except Exception:
+    except Exception as error:
+        diagnostics.log_exception(LOGGER, "company_news", error)
         news_result = {
             "status": "unavailable",
             "message": "Recent news temporarily unavailable.",
             "articles": [],
         }
+    if isinstance(news_result, dict) and news_result.get("status") == "unavailable":
+        LOGGER.warning("Company news unavailable: ticker=%s", symbol)
 
     analysis_context = analysis.build_analysis_context(
         ticker=symbol,
@@ -116,32 +139,41 @@ def build_report(
     )
     try:
         company_analysis = analysis.get_ai_analysis(analysis_context)
-    except Exception:
+    except Exception as error:
+        diagnostics.log_exception(LOGGER, "company_analysis", error)
         company_analysis = {
             "status": "unavailable",
             "message": "AI analysis temporarily unavailable.",
             "analysis": None,
         }
+    if isinstance(company_analysis, dict) and company_analysis.get("status") == "unavailable":
+        LOGGER.warning("Company analysis unavailable: ticker=%s", symbol)
 
     try:
         market_review = market_research.get_market_review(company)
-    except Exception:
+    except Exception as error:
+        diagnostics.log_exception(LOGGER, "market_review", error)
         market_review = {
             "status": "unavailable",
             "message": "Market & industry review temporarily unavailable.",
             "review": None,
             "sources": [],
         }
+    if isinstance(market_review, dict) and market_review.get("status") == "unavailable":
+        LOGGER.warning("Market review unavailable: ticker=%s", symbol)
 
     bull_bear_context = analysis.build_bull_bear_context(analysis_context, market_review)
     try:
         bull_bear = analysis.get_bull_bear_analysis(bull_bear_context)
-    except Exception:
+    except Exception as error:
+        diagnostics.log_exception(LOGGER, "bull_bear_analysis", error)
         bull_bear = {
             "status": "unavailable",
             "message": "Bull / Bear analysis temporarily unavailable.",
             "analysis": None,
         }
+    if isinstance(bull_bear, dict) and bull_bear.get("status") == "unavailable":
+        LOGGER.warning("Bull / Bear analysis unavailable: ticker=%s", symbol)
 
     assessment_context = {
         "ticker": symbol,
@@ -158,8 +190,11 @@ def build_report(
     try:
         stock_assessment = assessment.build_stock_assessment(assessment_context)
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "stock_assessment", error)
         errors["assessment"] = f"Could not build stock assessment: {error}"
         stock_assessment = {"status": "ok", "indicators": {}}
+    if isinstance(stock_assessment, dict) and stock_assessment.get("status") == "unavailable":
+        LOGGER.warning("Stock assessment unavailable: ticker=%s", symbol)
 
     return {
         "ticker": symbol,

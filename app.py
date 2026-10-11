@@ -1,6 +1,8 @@
 """Streamlit entry point for the stock assessment dashboard."""
 
 from html import escape
+import logging
+import os
 from random import choice
 import re
 from typing import Any
@@ -16,6 +18,14 @@ from investment_research import (
     main,
     qualitative_display,
     ticker_resolution,
+    diagnostics,
+)
+
+LOGGER = logging.getLogger(__name__)
+PROVIDER_API_KEY_NAMES = (
+    "GOOGLE_API_KEY",
+    "TAVILY_API_KEY",
+    "MARKETAUX_API_KEY",
 )
 
 
@@ -166,33 +176,62 @@ def _render_loading_company(placeholder: Any, company: dict[str, Any]) -> None:
 
 
 def _build_report_for_ticker(ticker: str) -> None:
+    LOGGER.info("Company lookup started: ticker=%s", ticker)
     with st.spinner(f"Checking {ticker}..."):
         try:
             company = main.get_company_info(ticker)
-        except main.ReportBuildError:
+        except main.ReportBuildError as error:
+            diagnostics.log_exception(LOGGER, "company_lookup", error)
+            LOGGER.info("Company lookup failed: ticker=%s", ticker)
             st.error("Could not complete the analysis. Please try again.")
             return
+        except Exception as error:
+            diagnostics.log_exception(LOGGER, "company_lookup", error)
+            raise
 
         if company is None:
+            LOGGER.warning("Company lookup returned None: ticker=%s", ticker)
+            LOGGER.info("User-facing error written: company_not_found")
             st.error("Ticker or company not found. Check the symbol or company name and try again.")
             return
 
+        LOGGER.info(
+            "Company lookup succeeded: ticker=%s company_name=%r",
+            ticker,
+            company.get("name"),
+        )
         company_description = limit_company_description(company.get("description"))
         if "description" in company:
             company["description"] = company_description
         loading_placeholder = st.empty()
         _render_loading_company(loading_placeholder, company)
+        LOGGER.info("Report build started: ticker=%s", ticker)
         try:
             report = main.build_report(ticker, preloaded_company=company)
-        except main.ReportBuildError:
+        except main.ReportBuildError as error:
+            diagnostics.log_exception(LOGGER, "report_build", error)
+            LOGGER.info("Report build raised ReportBuildError: ticker=%s", ticker)
+            LOGGER.info("User-facing error written: report_build_failed")
             st.error("Could not complete the analysis. Please try again.")
             return
+        except Exception as error:
+            diagnostics.log_exception(LOGGER, "report_build", error)
+            raise
         finally:
             loading_placeholder.empty()
 
+    LOGGER.info(
+        "Report build returned: ticker=%s is_none=%s keys=%s",
+        ticker,
+        report is None,
+        sorted(report.keys()) if isinstance(report, dict) else [],
+    )
     if report is not None:
         st.session_state["research_report"] = report
+        LOGGER.info("Session state report written: ticker=%s key=research_report", ticker)
     else:
+        LOGGER.warning("Report build returned None: ticker=%s", ticker)
+        LOGGER.info("User-facing error written: report_not_found")
         st.error("Ticker or company not found. Check the symbol or company name and try again.")
 
 
@@ -274,22 +313,50 @@ with st.form("ticker_analysis_form"):
     submitted = st.form_submit_button("Analyse")
 
 if submitted:
+    LOGGER.info(
+        "Analysis submitted: input=%r layout_mode=%s",
+        ticker,
+        st.session_state.get("assessment_layout_mode", "Desktop"),
+    )
+    LOGGER.info(
+        "Provider API key presence: GOOGLE_API_KEY=%s TAVILY_API_KEY=%s MARKETAUX_API_KEY=%s",
+        *(bool(os.environ.get(name)) for name in PROVIDER_API_KEY_NAMES),
+    )
     st.session_state.pop("research_report", None)
     st.session_state.pop("selected_evidence_indicator", None)
     st.session_state.pop("ticker_resolution_candidates", None)
     if not ticker:
+        LOGGER.info("User-facing error written: empty_ticker")
         st.error("Please enter a ticker symbol.")
     else:
+        LOGGER.info("Ticker resolution started: input=%r", ticker)
         try:
             resolution = ticker_resolution.resolve_security_input(ticker)
-        except ticker_resolution.TickerResolutionError:
+        except ticker_resolution.TickerResolutionError as error:
+            diagnostics.log_exception(LOGGER, "ticker_resolution", error)
+            LOGGER.info("User-facing error written: ticker_resolution_failed")
             st.error("Could not look up that ticker or company right now. Please try again.")
+        except Exception as error:
+            diagnostics.log_exception(LOGGER, "ticker_resolution", error)
+            raise
         else:
+            LOGGER.info(
+                "Ticker resolution returned: status=%s canonical_ticker=%s candidate_count=%s",
+                resolution.status,
+                resolution.ticker if resolution.status == "resolved" else None,
+                len(resolution.candidates) if resolution.status == "ambiguous" else 0,
+            )
             if resolution.status == "resolved" and resolution.ticker:
                 _build_report_for_ticker(resolution.ticker)
             elif resolution.status == "ambiguous":
                 st.session_state["ticker_resolution_candidates"] = resolution.candidates
+                LOGGER.info(
+                    "Session state candidates written: candidate_count=%d",
+                    len(resolution.candidates),
+                )
             else:
+                LOGGER.info("Ticker resolution not_found: input=%r", ticker)
+                LOGGER.info("User-facing error written: ticker_not_found")
                 st.error("Ticker or company not found. Check the symbol or company name and try again.")
 
 pending_candidates = st.session_state.get("ticker_resolution_candidates")
@@ -307,6 +374,11 @@ if pending_candidates:
         key="ticker-resolution-selection",
     )
     if st.button("Analyse selected listing", key="analyse-selected-listing"):
+        LOGGER.info(
+            "Ambiguous listing selected: ticker=%s company_name=%r",
+            selected_candidate.ticker,
+            selected_candidate.company_name,
+        )
         st.session_state.pop("ticker_resolution_candidates", None)
         _build_report_for_ticker(selected_candidate.ticker)
 

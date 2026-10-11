@@ -16,7 +16,7 @@ import time
 from pathlib import Path
 from typing import Any
 
-from . import cache
+from . import cache, diagnostics
 from .assessment_scoring import is_concise_bullet, validate_qualitative_indicator
 
 
@@ -341,13 +341,14 @@ def _request_with_retry(request, feature_label: str) -> str | None:
         try:
             return request()
         except Exception as exc:
+            diagnostics.log_exception(
+                logger, f"{feature_label.lower()}_gemini_request", exc
+            )
             if _is_429(exc):
                 print(f"{feature_label}: Gemini quota or rate limit reached.")
             elif _is_503(exc) and attempt < 2:
                 time.sleep(2 ** (attempt + 1))
                 continue
-            else:
-                print(f"{feature_label} ERROR:", repr(exc))
             return None
     return None
 
@@ -356,10 +357,11 @@ def _request_once(request, feature_label: str) -> str | None:
     try:
         return request()
     except Exception as exc:
+        diagnostics.log_exception(
+            logger, f"{feature_label.lower()}_gemini_request", exc
+        )
         if _is_429(exc):
             print(f"{feature_label}: Gemini quota or rate limit reached.")
-        else:
-            print(f"{feature_label} ERROR:", repr(exc))
         return None
 
 
@@ -458,6 +460,7 @@ def generate_analysis(context: dict[str, Any]) -> dict[str, Any]:
     """
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
+        logger.warning("Feature 9 unavailable: GOOGLE_API_KEY is not present")
         return _unavailable()
 
     cached = cache.read("feature-9", context)
@@ -471,13 +474,16 @@ def generate_analysis(context: dict[str, Any]) -> dict[str, Any]:
         "FEATURE 9",
     )
     if not raw_response or not raw_response.strip():
+        logger.warning("Feature 9 unavailable: Gemini returned an empty response")
         return _unavailable()
     try:
         decoded = json.loads(raw_response)
     except (TypeError, ValueError):
+        logger.warning("Feature 9 unavailable: Gemini response was not valid JSON")
         return _unavailable()
     analysis = _validate_analysis(decoded)
     if analysis is None:
+        logger.warning("Feature 9 unavailable: Gemini response failed schema validation")
         return _unavailable()
 
     result = {
@@ -498,6 +504,7 @@ def generate_qualitative_assessment(
     """Generate independently validated qualitative indicators from prior evidence."""
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
+        logger.warning("Feature 12B unavailable: GOOGLE_API_KEY is not present")
         return {"status": "unavailable", "indicators": {}}
 
     eligible = (
@@ -552,6 +559,7 @@ def generate_qualitative_assessment(
         )
 
     if not indicators:
+        logger.warning("Feature 12B unavailable: no valid qualitative indicators")
         return {"status": "unavailable", "indicators": {}}
     result = {"status": "ok", "indicators": indicators}
     if eligible <= set(indicators):
@@ -1050,7 +1058,7 @@ def generate_bull_bear(context: dict[str, Any]) -> dict[str, Any]:
     """Generate validated Feature 11 scenario analysis or a safe unavailable result."""
     api_key = os.environ.get("GOOGLE_API_KEY")
     if not api_key:
-        _feature11_debug("API key unavailable; no request made")
+        logger.warning("Feature 11 unavailable: GOOGLE_API_KEY is not present")
         return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
 
     _feature11_debug("cache checked")
@@ -1064,9 +1072,9 @@ def generate_bull_bear(context: dict[str, Any]) -> dict[str, Any]:
 
     try:
         raw_response = _request_bull_bear_model(context, api_key)
-    except Exception:
+    except Exception as error:
         _feature11_debug("primary request raised provider exception")
-        logger.debug("Feature 11 primary Gemini request failed", exc_info=True)
+        diagnostics.log_exception(logger, "feature_11_gemini_primary", error)
         return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
 
     _feature11_debug("primary request succeeded")
@@ -1080,9 +1088,9 @@ def generate_bull_bear(context: dict[str, Any]) -> dict[str, Any]:
                 api_key,
                 raw_response or "",
             )
-        except Exception:
+        except Exception as error:
             _feature11_debug("repair request raised provider exception")
-            logger.debug("Feature 11 repair Gemini request failed", exc_info=True)
+            diagnostics.log_exception(logger, "feature_11_gemini_repair", error)
             return {"status": "unavailable", "message": "Bull / Bear analysis temporarily unavailable.", "analysis": None}
         _feature11_debug("repair request succeeded")
         _capture_feature11_response(repair_response, context, "repair")

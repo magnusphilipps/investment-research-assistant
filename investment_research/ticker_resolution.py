@@ -5,13 +5,17 @@ from __future__ import annotations
 from collections import OrderedDict
 from dataclasses import dataclass
 import re
+import logging
 from threading import Lock
 from typing import Literal
 
 import yfinance as yf
 
+from . import diagnostics
+
 
 MAX_CANDIDATES = 3
+LOGGER = logging.getLogger(__name__)
 _CACHE_MAX_ENTRIES = 256
 _SCORE_LEAD_RATIO = 1.01
 _SYMBOL_PATTERN = re.compile(r"[A-Z0-9][A-Z0-9.^=-]{0,19}\Z")
@@ -113,6 +117,7 @@ def _search_candidates(query: str) -> list[_SearchCandidate]:
             timeout=10,
         ).quotes
     except Exception as error:
+        diagnostics.log_exception(LOGGER, "ticker_symbol_search", error)
         raise TickerResolutionError("Yahoo Finance symbol search failed.") from error
 
     candidates: list[_SearchCandidate] = []

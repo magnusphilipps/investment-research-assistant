@@ -21,7 +21,13 @@
 #   Phase 2 — sector, industry, country, employees, website, description
 # ============================================================
 
+import logging
+
 import yfinance as yf  # Third-party library for fetching stock data
+
+from . import diagnostics
+
+LOGGER = logging.getLogger(__name__)
 
 
 def is_not_found_error(error: Exception) -> bool:
@@ -82,11 +88,18 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
         info = ticker.info
     except Exception as error:
         if is_not_found_error(error):
+            diagnostics.log_exception(LOGGER, "company_lookup_not_found", error)
             return None
+        diagnostics.log_exception(LOGGER, "company_lookup_fetch", error)
         raise
 
     # Yahoo may return the requested symbol even when it has no security record.
     if not isinstance(info, dict) or not is_resolved_security(ticker_symbol, info):
+        LOGGER.warning(
+            "Company lookup rejected provider result: ticker=%s result_is_dict=%s",
+            ticker_symbol,
+            isinstance(info, dict),
+        )
         return None
 
     # ----------------------------------------------------------------

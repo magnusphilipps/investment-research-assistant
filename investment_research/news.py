@@ -9,12 +9,16 @@ It never prints output and never exposes the API token in errors or logs.
 from __future__ import annotations
 
 import os
+import logging
 import re
 from datetime import datetime, timedelta, timezone
 from typing import Any
 
 import requests
 
+from . import diagnostics
+
+LOGGER = logging.getLogger(__name__)
 
 MARKETAUX_NEWS_URL = "https://api.marketaux.com/v1/news/all"
 REQUEST_TIMEOUT_SECONDS = 10
@@ -242,6 +246,7 @@ def get_company_news(ticker: str) -> dict[str, Any]:
     """
     api_token = os.environ.get("MARKETAUX_API_KEY")
     if not api_token:
+        LOGGER.warning("Company news unavailable: MARKETAUX_API_KEY is not present")
         return _result(
             "unavailable",
             "Recent news temporarily unavailable.",
@@ -273,14 +278,17 @@ def get_company_news(ticker: str) -> dict[str, Any]:
         )
         response.raise_for_status()
         payload = response.json()
-    except (requests.RequestException, ValueError, TypeError):
+    except (requests.RequestException, ValueError, TypeError) as error:
+        diagnostics.log_exception(LOGGER, "company_news_provider", error)
         return _result("unavailable", "Recent news temporarily unavailable.")
 
     if not isinstance(payload, dict) or payload.get("error"):
+        LOGGER.warning("Company news provider returned an invalid/error response")
         return _result("unavailable", "Recent news temporarily unavailable.")
 
     raw_articles = payload.get("data")
     if not isinstance(raw_articles, list):
+        LOGGER.warning("Company news provider returned no article list")
         return _result("unavailable", "Recent news temporarily unavailable.")
 
     articles = [

@@ -8,7 +8,7 @@ import re
 from typing import Any
 from urllib.parse import urlparse
 
-from . import cache, gemini_provider, tavily_provider
+from . import cache, diagnostics, gemini_provider, tavily_provider
 from .assessment_scoring import is_concise_bullet
 
 
@@ -266,6 +266,7 @@ def get_market_review(stock_info: dict[str, Any] | None) -> dict[str, Any]:
     """Retrieve external evidence and synthesize a grounded market review."""
     queries = build_queries(stock_info)
     if not queries:
+        LOGGER.warning("Market review unavailable: no usable company research query")
         return _unavailable()
 
     query = queries[0]
@@ -282,11 +283,13 @@ def get_market_review(stock_info: dict[str, Any] | None) -> dict[str, Any]:
         raw_results = tavily_provider.search(
             query, max_results=tavily_provider.MAX_RESULTS_PER_QUERY, search_depth="basic"
         )
-    except Exception:
+    except Exception as error:
+        diagnostics.log_exception(LOGGER, "market_review_tavily_search", error)
         return _unavailable()
 
     evidence = clean_evidence(raw_results)
     if not evidence:
+        LOGGER.warning("Market review unavailable: search returned no usable evidence")
         return _unavailable()
 
     context = {
@@ -299,12 +302,18 @@ def get_market_review(stock_info: dict[str, Any] | None) -> dict[str, Any]:
     }
     try:
         result = gemini_provider.generate_market_review(context)
-    except Exception:
+    except Exception as error:
+        diagnostics.log_exception(LOGGER, "market_review_gemini", error)
         return _unavailable()
     if result.get("status") != "ok":
+        LOGGER.warning(
+            "Market review unavailable: synthesis status=%s",
+            result.get("status"),
+        )
         return _unavailable()
     review = _validate_review(result.get("review"), evidence)
     if review is None:
+        LOGGER.warning("Market review unavailable: generated review failed validation")
         return _unavailable()
     source_ids = set(review["sources_used"])
     final_result = {
