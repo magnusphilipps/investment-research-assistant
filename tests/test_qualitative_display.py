@@ -1,4 +1,5 @@
 import copy
+import json
 import runpy
 import sys
 import unittest
@@ -745,9 +746,24 @@ class QualitativeDisplayTests(unittest.TestCase):
         with patch.dict(sys.modules, {"streamlit": fake_streamlit}):
             runpy.run_path(str(app_path), run_name="feature_13e_branding_test")
 
-        self.assertEqual(fake_streamlit.page_config["page_title"], "Stock Checker")
+        self.assertEqual(fake_streamlit.page_config, {
+            "page_title": "Stock Checker",
+            "page_icon": "static/stock_checker_icon.png",
+        })
         self.assertEqual(fake_streamlit.title_calls, ["Stock Checker"])
         css = "\n".join(fake_streamlit.markdown_calls)
+        self.assertEqual(len(fake_streamlit.html_calls), 1)
+        head_script, html_kwargs = fake_streamlit.html_calls[0]
+        self.assertIn('["manifest", "/app/static/stock_checker_manifest.json"]', head_script)
+        self.assertIn('["apple-touch-icon", "/app/static/stock_checker_icon.png"]', head_script)
+        self.assertTrue(html_kwargs["unsafe_allow_javascript"])
+        manifest_path = Path(__file__).resolve().parents[1] / "static/stock_checker_manifest.json"
+        manifest = json.loads(manifest_path.read_text())
+        self.assertEqual(manifest["name"], "Stock Checker")
+        self.assertEqual(manifest["short_name"], "Stock Checker")
+        self.assertEqual(manifest["display"], "standalone")
+        self.assertEqual(manifest["icons"][0]["src"], "/app/static/stock_checker_icon.png")
+        self.assertEqual(manifest["icons"][0]["type"], "image/png")
         for category in ("positive", "neutral", "caution", "muted"):
             self.assertIn(f".assessment-{category}", css)
         self.assertIn("height: 190px", css)
@@ -1112,6 +1128,7 @@ class _FakeStreamlit:
         self.placeholders = []
         self.segmented_controls = []
         self.column_counts = []
+        self.html_calls = []
 
     def set_page_config(self, **_kwargs):
         self.page_config = _kwargs
@@ -1133,6 +1150,9 @@ class _FakeStreamlit:
     def markdown(self, value, **_kwargs):
         self.markdown_calls.append(str(value))
         self.events.append(("markdown", str(value)))
+
+    def html(self, value, **kwargs):
+        self.html_calls.append((str(value), kwargs))
 
     def caption(self, *_args, **_kwargs):
         return None

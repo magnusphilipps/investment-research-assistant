@@ -1,0 +1,13 @@
+{
+  "name": "Stock Checker",
+  "short_name": "Stock Checker",
+  "display": "standalone",
+  "start_url": "/",
+  "icons": [
+    {
+      "src": "/app/static/stock_checker_icon.png",
+      "sizes": "1280x1280",
+      "type": "image/png"
+    }
+  ]
+}

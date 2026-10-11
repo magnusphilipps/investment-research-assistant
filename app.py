@@ -196,7 +196,32 @@ def _build_report_for_ticker(ticker: str) -> None:
         st.error("Ticker or company not found. Check the symbol or company name and try again.")
 
 
-st.set_page_config(page_title="Stock Checker")
+st.set_page_config(
+    page_title="Stock Checker",
+    page_icon="static/stock_checker_icon.png",
+)
+st.html(
+    """
+    <script>
+    (() => {
+      const headLinks = [
+        ["manifest", "/app/static/stock_checker_manifest.json"],
+        ["apple-touch-icon", "/app/static/stock_checker_icon.png"],
+      ];
+      for (const [rel, href] of headLinks) {
+        let link = document.head.querySelector(`link[rel="${rel}"]`);
+        if (!link) {
+          link = document.createElement("link");
+          link.rel = rel;
+          document.head.appendChild(link);
+        }
+        link.href = href;
+      }
+    })();
+    </script>
+    """,
+    unsafe_allow_javascript=True,
+)
 st.title("Stock Checker")
 st.write("Research public companies with company, financial, and market context.")
 

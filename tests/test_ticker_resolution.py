@@ -156,6 +156,12 @@ class TickerResolutionTests(unittest.TestCase):
             def write(self, *_args, **_kwargs):
                 pass
 
+            def markdown(self, *_args, **_kwargs):
+                pass
+
+            def html(self, *_args, **_kwargs):
+                pass
+
             def form(self, *_args, **_kwargs):
                 return nullcontext()
 
@@ -216,6 +222,12 @@ class TickerResolutionTests(unittest.TestCase):
                 pass
 
             def write(self, *_args, **_kwargs):
+                pass
+
+            def markdown(self, *_args, **_kwargs):
+                pass
+
+            def html(self, *_args, **_kwargs):
                 pass
 
             def form(self, *_args, **_kwargs):
