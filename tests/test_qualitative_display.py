@@ -536,6 +536,32 @@ class QualitativeDisplayTests(unittest.TestCase):
         )
         self.assertEqual(fake_streamlit.tables[0][0], {"Metric": "Trailing P/E", "Value": "20.50x"})
 
+    def test_assessment_layout_defaults_to_desktop_and_keeps_two_rows_of_four(self):
+        fake_streamlit = _FakeStreamlit(_dashboard_report())
+        _run_app(fake_streamlit)
+
+        self.assertEqual(fake_streamlit.session_state["assessment_layout_mode"], "Desktop")
+        self.assertEqual(fake_streamlit.segmented_controls, [
+            ("Layout", ("Desktop", "Mobile"), "assessment_layout_mode"),
+        ])
+        self.assertEqual(fake_streamlit.column_counts, [2, 4, 4])
+        self.assertEqual(
+            [
+                key for _, key, _ in fake_streamlit.buttons
+                if key.startswith("assessment-evidence-")
+            ],
+            [
+                "assessment-evidence-valuation",
+                "assessment-evidence-financial_quality",
+                "assessment-evidence-growth",
+                "assessment-evidence-risk",
+                "assessment-evidence-volatility",
+                "assessment-evidence-market_environment",
+                "assessment-evidence-competitive_position",
+                "assessment-evidence-expectations",
+            ],
+        )
+
     def test_row_two_selection_renders_full_width_evidence_after_row_two(self):
         fake_streamlit = _FakeStreamlit(
             _dashboard_report(),
@@ -555,6 +581,129 @@ class QualitativeDisplayTests(unittest.TestCase):
             "volatility",
         )
         self.assertNotIn("daily_returns", str(fake_streamlit.tables))
+
+    def test_mobile_mode_renders_all_indicators_sequentially_with_evidence_in_place(self):
+        fake_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            selected_indicator="growth",
+            layout_mode="Mobile",
+        )
+        _run_app(fake_streamlit)
+
+        card_names = (
+            "Valuation",
+            "Financial Quality",
+            "Growth",
+            "Risk",
+            "Volatility",
+            "Market Environment",
+            "Competitive Position",
+            "Expectations",
+        )
+        card_positions = [
+            next(
+                index for index, (kind, value) in enumerate(fake_streamlit.events)
+                if kind == "markdown"
+                and f'class="assessment-card-title">{name}</div>' in value
+            )
+            for name in card_names
+        ]
+        self.assertEqual(card_positions, sorted(card_positions))
+        self.assertEqual(fake_streamlit.column_counts, [2])
+        growth_button = fake_streamlit.events.index(
+            ("button", "assessment-evidence-growth")
+        )
+        growth_evidence = fake_streamlit.events.index(("markdown", "### Growth"))
+        risk_card = card_positions[3]
+        self.assertLess(growth_button, growth_evidence)
+        self.assertLess(growth_evidence, risk_card)
+        self.assertEqual(
+            sum(
+                kind == "markdown" and value.startswith("### ")
+                for kind, value in fake_streamlit.events
+            ),
+            1,
+        )
+        self.assertEqual(
+            fake_streamlit.session_state["selected_evidence_indicator"],
+            "growth",
+        )
+
+    def test_mobile_evidence_selection_switches_and_toggles_without_report_rebuild(self):
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        switched_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            click_button_key="assessment-evidence-growth",
+            selected_indicator="financial_quality",
+            layout_mode="Mobile",
+        )
+        with patch.dict(sys.modules, {"streamlit": switched_streamlit}), patch(
+            "investment_research.main.build_report"
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13mobile_switch_test")
+
+        self.assertEqual(
+            switched_streamlit.session_state["selected_evidence_indicator"],
+            "growth",
+        )
+        self.assertIn(("markdown", "### Growth"), switched_streamlit.events)
+        self.assertNotIn(
+            ("markdown", "### Financial Quality"),
+            switched_streamlit.events,
+        )
+        build_report.assert_not_called()
+
+        closed_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            click_button_key="assessment-evidence-growth",
+            selected_indicator="growth",
+            layout_mode="Mobile",
+        )
+        with patch.dict(sys.modules, {"streamlit": closed_streamlit}), patch(
+            "investment_research.main.build_report"
+        ) as build_report:
+            runpy.run_path(str(app_path), run_name="feature_13mobile_toggle_test")
+
+        self.assertIsNone(closed_streamlit.session_state["selected_evidence_indicator"])
+        self.assertNotIn(("markdown", "### Growth"), closed_streamlit.events)
+        build_report.assert_not_called()
+
+    def test_layout_change_reuses_saved_report_without_provider_calls(self):
+        fake_streamlit = _FakeStreamlit(
+            _dashboard_report(),
+            selected_indicator="risk",
+            layout_mode="Mobile",
+        )
+        app_path = Path(__file__).resolve().parents[1] / "app.py"
+        with patch.dict(sys.modules, {"streamlit": fake_streamlit}), patch(
+            "investment_research.main.build_report"
+        ) as build_report, patch(
+            "investment_research.gemini_provider.generate_analysis"
+        ) as company_provider, patch(
+            "investment_research.gemini_provider.generate_market_review"
+        ) as market_provider, patch(
+            "investment_research.gemini_provider.generate_bull_bear"
+        ) as bull_bear_provider, patch(
+            "investment_research.tavily_provider.search"
+        ) as search, patch(
+            "investment_research.news.requests.get"
+        ) as marketaux_request, patch(
+            "investment_research.ticker_resolution.resolve_security_input"
+        ) as resolver:
+            runpy.run_path(str(app_path), run_name="feature_13layout_only_test")
+
+        self.assertEqual(fake_streamlit.session_state["selected_evidence_indicator"], "risk")
+        self.assertIn(("markdown", "### Risk"), fake_streamlit.events)
+        for provider in (
+            build_report,
+            company_provider,
+            market_provider,
+            bull_bear_provider,
+            search,
+            marketaux_request,
+            resolver,
+        ):
+            provider.assert_not_called()
 
     def test_evidence_selection_switches_and_toggles_without_rebuilding_report(self):
         fake_streamlit = _FakeStreamlit(
@@ -929,10 +1078,12 @@ class _FakeStreamlit:
         *,
         submitted=False,
         ticker="",
+        layout_mode=None,
     ):
         self.session_state = {"research_report": saved_report}
         self.submitted = submitted
         self.ticker = ticker
+        self.layout_mode = layout_mode
         self.click_button_key = click_button_key
         if selected_indicator:
             self.session_state["selected_evidence_indicator"] = selected_indicator
@@ -959,6 +1110,8 @@ class _FakeStreamlit:
         self.loading_events = []
         self.loading_messages = []
         self.placeholders = []
+        self.segmented_controls = []
+        self.column_counts = []
 
     def set_page_config(self, **_kwargs):
         self.page_config = _kwargs
@@ -974,6 +1127,7 @@ class _FakeStreamlit:
         return None
 
     def columns(self, count):
+        self.column_counts.append(count)
         return [_FakeColumn(self) for _ in range(count)]
 
     def markdown(self, value, **_kwargs):
@@ -1007,6 +1161,12 @@ class _FakeStreamlit:
 
     def form_submit_button(self, *_args, **_kwargs):
         return self.submitted
+
+    def segmented_control(self, label, options, *, key, **_kwargs):
+        self.segmented_controls.append((label, options, key))
+        value = self.layout_mode or self.session_state.get(key, options[0])
+        self.session_state[key] = value
+        return value
 
     def expander(self, title, **kwargs):
         self.expanders.append((title, kwargs))

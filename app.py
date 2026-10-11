@@ -127,6 +127,28 @@ def _render_assessment_evidence(
             st.info("No supporting evidence is available for this indicator.")
 
 
+def _render_assessment_card(container: Any, card: dict[str, str], indicator_key: str) -> None:
+    style = escape(card["style"])
+    label = escape(card["label"])
+    driver = escape(card["driver"]) or " "
+    container.markdown(
+        f'<div class="assessment-card">'
+        f'<div class="assessment-card-title">{escape(card["name"])}</div>'
+        f'<div><span class="assessment-badge assessment-{style}">{label}</span></div>'
+        f'<div class="assessment-card-driver">{driver}</div>'
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    is_selected = st.session_state.get("selected_evidence_indicator") == indicator_key
+    container.button(
+        "Hide evidence" if is_selected else "View evidence",
+        key=f"assessment-evidence-{indicator_key}",
+        width="stretch",
+        on_click=_toggle_assessment_evidence,
+        args=(indicator_key,),
+    )
+
+
 def _render_loading_company(placeholder: Any, company: dict[str, Any]) -> None:
     description = company.get("description")
     loading_container = placeholder.container()
@@ -281,49 +303,44 @@ if isinstance(report, dict):
 
     st.markdown(ASSESSMENT_STYLES, unsafe_allow_html=True)
     st.subheader("Stock Assessment")
+    st.session_state.setdefault("assessment_layout_mode", "Desktop")
+    st.segmented_control(
+        "Layout",
+        options=("Desktop", "Mobile"),
+        key="assessment_layout_mode",
+        width="content",
+    )
     assessment_cards = assessment_display.get_assessment_display(report)
     indicator_specs = assessment_display.ASSESSMENT_INDICATORS
     selected_indicator = st.session_state.get("selected_evidence_indicator")
-    for start in range(0, len(assessment_cards), 4):
-        columns = st.columns(4)
-        for column, card, (indicator_key, _) in zip(
-            columns,
-            assessment_cards[start : start + 4],
-            indicator_specs[start : start + 4],
-        ):
-            style = escape(card["style"])
-            label = escape(card["label"])
-            driver = escape(card["driver"]) or " "
-            column.markdown(
-                f'<div class="assessment-card">'
-                f'<div class="assessment-card-title">{escape(card["name"])}</div>'
-                f'<div><span class="assessment-badge assessment-{style}">{label}</span></div>'
-                f'<div class="assessment-card-driver">{driver}</div>'
-                "</div>",
-                unsafe_allow_html=True,
-            )
-            is_selected = selected_indicator == indicator_key
-            column.button(
-                "Hide evidence" if is_selected else "View evidence",
-                key=f"assessment-evidence-{indicator_key}",
-                use_container_width=True,
-                on_click=_toggle_assessment_evidence,
-                args=(indicator_key,),
-            )
+    if st.session_state["assessment_layout_mode"] == "Mobile":
+        for card, (indicator_key, _) in zip(assessment_cards, indicator_specs):
+            _render_assessment_card(st, card, indicator_key)
+            if selected_indicator == indicator_key:
+                _render_assessment_evidence(report, card, indicator_key)
+    else:
+        for start in range(0, len(assessment_cards), 4):
+            columns = st.columns(4)
+            for column, card, (indicator_key, _) in zip(
+                columns,
+                assessment_cards[start : start + 4],
+                indicator_specs[start : start + 4],
+            ):
+                _render_assessment_card(column, card, indicator_key)
 
-        selected_index = next(
-            (
-                index for index, (key, _) in enumerate(indicator_specs)
-                if key == selected_indicator
-            ),
-            None,
-        )
-        if selected_index is not None and start <= selected_index < start + 4:
-            _render_assessment_evidence(
-                report,
-                assessment_cards[selected_index],
-                indicator_specs[selected_index][0],
+            selected_index = next(
+                (
+                    index for index, (key, _) in enumerate(indicator_specs)
+                    if key == selected_indicator
+                ),
+                None,
             )
+            if selected_index is not None and start <= selected_index < start + 4:
+                _render_assessment_evidence(
+                    report,
+                    assessment_cards[selected_index],
+                    indicator_specs[selected_index][0],
+                )
 
     qualitative_sections = (
         ("AI Company Analysis", qualitative_display.get_company_analysis_display(report)),
