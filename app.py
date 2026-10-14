@@ -493,7 +493,13 @@ if isinstance(report, dict):
         "Share Price",
         display.format_market_price(company.get("price"), company.get("currency")),
     )
-    header_columns[1].metric("Market Cap", display.format_market_cap(company.get("market_cap")))
+    header_columns[1].metric(
+        "Market Cap",
+        display.format_market_cap(
+            company.get("market_cap"),
+            company.get("market_cap_currency"),
+        ),
+    )
     description = company.get("description")
     if isinstance(description, str) and description.strip():
         st.markdown(

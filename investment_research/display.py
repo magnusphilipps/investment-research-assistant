@@ -103,8 +103,13 @@ _MARKET_CURRENCY_PREFIXES = {
 }
 
 
-def format_market_price(value, currency: str | None = None) -> str:
-    """Format a share price in its provider-supplied trading currency or unit."""
+def format_currency_value(
+    value,
+    currency: str | None = None,
+    *,
+    decimals: int = 2,
+) -> str:
+    """Format a monetary amount in the supplied currency or quotation unit."""
     if isinstance(value, str) and value.strip().upper() in {"N/A", "N/M"}:
         return value.strip().upper()
     if _is_missing_value(value):
@@ -114,13 +119,19 @@ def format_market_price(value, currency: str | None = None) -> str:
     raw_code = currency.strip() if isinstance(currency, str) else ""
     code = raw_code.upper()
     if raw_code == "GBp" or code in {"GBX", "GBPENCE"}:
-        amount = f"{abs(number):,.2f}p"
+        amount = f"{abs(number):,.{decimals}f}p"
     else:
-        decimals = 0 if code in {"JPY", "KRW"} else 2
         amount = f"{abs(number):,.{decimals}f}"
         prefix = _MARKET_CURRENCY_PREFIXES.get(code, f"{code} " if code else "")
         amount = f"{prefix}{amount}"
     return f"-{amount}" if number < 0 else amount
+
+
+def format_market_price(value, currency: str | None = None) -> str:
+    """Format a share price in its provider-supplied trading currency or unit."""
+    code = currency.strip().upper() if isinstance(currency, str) else ""
+    decimals = 0 if code in {"JPY", "KRW"} else 2
+    return format_currency_value(value, currency, decimals=decimals)
 
 
 def shorten_description(text: str | None, max_sentences: int = 4, max_chars: int = 400) -> str:
@@ -158,7 +169,10 @@ def shorten_description(text: str | None, max_sentences: int = 4, max_chars: int
     return " ".join(kept)
 
 
-def format_market_cap(market_cap: int | None) -> str:
+def format_market_cap(
+    market_cap: int | float | None,
+    currency: str | None = None,
+) -> str:
     """
     Convert a raw market cap number into a human-readable string.
 
@@ -174,25 +188,27 @@ def format_market_cap(market_cap: int | None) -> str:
     """
 
     # If the data is missing, return a friendly placeholder.
-    if market_cap is None:
+    if isinstance(market_cap, str) and market_cap.strip().upper() in {"N/A", "N/M"}:
+        return market_cap.strip().upper()
+    if _is_missing_value(market_cap):
         return "N/A"
 
+    amount = float(market_cap)
     # We use "elif" (else-if) to check thresholds from largest to smallest.
-    if market_cap >= 1_000_000_000_000:          # 1 trillion
-        value = market_cap / 1_000_000_000_000
-        return f"${value:,.2f} Trillion"
+    if amount >= 1_000_000_000_000:          # 1 trillion
+        value = amount / 1_000_000_000_000
+        return f"{format_currency_value(value, currency)} Trillion"
 
-    elif market_cap >= 1_000_000_000:            # 1 billion
-        value = market_cap / 1_000_000_000
-        return f"${value:,.2f} Billion"
+    elif amount >= 1_000_000_000:            # 1 billion
+        value = amount / 1_000_000_000
+        return f"{format_currency_value(value, currency)} Billion"
 
-    elif market_cap >= 1_000_000:                # 1 million
-        value = market_cap / 1_000_000
-        return f"${value:,.2f} Million"
+    elif amount >= 1_000_000:                # 1 million
+        value = amount / 1_000_000
+        return f"{format_currency_value(value, currency)} Million"
 
     else:
-        # Format with commas: 1234567 → $1,234,567
-        return f"${market_cap:,}"
+        return format_currency_value(amount, currency, decimals=0)
 
 
 def print_stock_info(data: dict) -> None:
@@ -214,7 +230,7 @@ def print_stock_info(data: dict) -> None:
     print(f"  Share Price  :  {format_market_price(data.get('price'), data.get('currency'))}")
 
     # format_market_cap handles None internally, so we can call it directly.
-    market_cap_str = format_market_cap(data["market_cap"])
+    market_cap_str = format_market_cap(data.get("market_cap"), data.get("market_cap_currency"))
     print(f"  Market Cap   :  {market_cap_str}")
 
     print(separator)

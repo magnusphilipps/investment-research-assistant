@@ -117,6 +117,7 @@ class StructuredReportTests(unittest.TestCase):
                 "ticker": "BARC.L",
                 "name": "Barclays PLC",
                 "currency": "GBp",
+                "market_cap_currency": "GBP",
             }
             company_lookup = stack.enter_context(
                 patch("investment_research.main.fetcher.get_stock_info", return_value=company)

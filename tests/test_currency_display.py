@@ -33,6 +33,22 @@ class MarketPriceDisplayTests(unittest.TestCase):
     def test_unknown_currency_does_not_assume_usd(self):
         self.assertEqual(display.format_market_price(123.45), "123.45")
 
+    def test_market_cap_uses_its_currency_and_existing_compact_scale(self):
+        cases = (
+            ("AAPL", 57_340_000_000, "USD", "$57.34 Billion"),
+            ("BARC.L", 57_340_000_000, "GBP", "£57.34 Billion"),
+            ("RWE.DE", 1_240_000_000_000, "EUR", "€1.24 Trillion"),
+            ("GBP listing", 57_340_000_000, "GBP", "£57.34 Billion"),
+            ("JPY listing", 5_730_000_000_000, "JPY", "¥5.73 Trillion"),
+            ("Unknown currency", 57_340_000_000, "CAD", "CAD 57.34 Billion"),
+        )
+
+        for label, value, currency, expected in cases:
+            with self.subTest(label=label):
+                self.assertEqual(display.format_market_cap(value, currency), expected)
+
+        self.assertEqual(display.format_market_cap(None, "GBP"), "N/A")
+
     def test_terminal_price_sections_use_native_currency_and_keep_returns_as_percentages(self):
         output = io.StringIO()
         with redirect_stdout(output):
@@ -40,8 +56,9 @@ class MarketPriceDisplayTests(unittest.TestCase):
                 "name": "Barclays PLC",
                 "ticker": "BARC.L",
                 "price": 123.45,
-                "market_cap": None,
+                "market_cap": 57_340_000_000,
                 "currency": "GBp",
+                "market_cap_currency": "GBP",
             })
             display.print_performance(
                 {
@@ -67,6 +84,8 @@ class MarketPriceDisplayTests(unittest.TestCase):
 
         rendered = output.getvalue()
         self.assertIn("Share Price  :  123.45p", rendered)
+        self.assertIn("Market Cap   :  £57.34 Billion", rendered)
+        self.assertNotIn("Market Cap   :  $", rendered)
         self.assertIn("52-Week High", rendered)
         self.assertIn("140.00p", rendered)
         self.assertIn("+5.0%", rendered)

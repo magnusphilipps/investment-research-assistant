@@ -207,6 +207,14 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
     name       = info.get("longName") or info.get("shortName") or "Unknown"
     price      = info.get("currentPrice") or info.get("regularMarketPrice")
     market_cap = info.get("marketCap")
+    market_cap_currency = (
+        info.get("marketCapCurrency")
+        or info.get("financialCurrency")
+    )
+    if not market_cap_currency and str(info.get("currency") or "").upper() not in {
+        "GBPENCE", "GBX",
+    } and info.get("currency") != "GBp":
+        market_cap_currency = info.get("currency")
 
     # ----------------------------------------------------------------
     # Phase 2 fields — company overview
@@ -236,6 +244,8 @@ def get_stock_info(ticker_symbol: str) -> dict | None:
         "price":       price,
         "market_cap":  market_cap,
         "currency":    info.get("currency"),
+        "price_currency": info.get("currency"),
+        "market_cap_currency": market_cap_currency,
         # Phase 2
         "sector":      sector,
         "industry":    industry,
